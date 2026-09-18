@@ -1,0 +1,289 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+/*
+ * Monochrome glass.
+ *
+ * The palette is pure greyscale: the only colour in the interface comes from
+ * mod icons, skins and server favicons. Depth is carried by translucency, a lit
+ * top edge and layered shadows instead of hue.
+ *
+ * Performance note: this app runs on WebKitGTK with compositing disabled, where
+ * `backdrop-filter` is painted on the CPU. Real blur is therefore reserved for
+ * the few large, rarely repainted surfaces (.glass-heavy); everything else fakes
+ * glass with translucent layers, which costs nothing.
+ */
+@theme {
+  --color-primary-50: #ffffff;
+  --color-primary-200: #e6e6e6;
+  --color-primary-300: #d4d4d4;
+  --color-primary-400: #bdbdbd;
+  --color-primary-500: #a3a3a3;
+  --color-primary-600: #7c7c7c;
+  --color-primary-700: #5c5c5c;
+  --color-primary-900: #2a2a2a;
+
+  --color-accent-400: #f5f5f5;
+  --color-accent-500: #d4d4d4;
+  --color-accent-600: #8a8a8a;
+
+  --color-base: #08090a;
+  --color-base-raised: #0e0f11;
+  --color-surface: #141517;
+  --color-surface-muted: #1b1c1f;
+  --color-line: #26282c;
+  --color-line-strong: #3a3d42;
+
+  --color-ink: #f2f3f4;
+  --color-ink-muted: #a1a5ab;
+  --color-ink-faint: #6d7176;
+
+  /* Neutral ramp in the same cool greyscale, so every existing neutral-*
+     utility lands inside this palette without touching the components. */
+  --color-neutral-50: #fafafa;
+  --color-neutral-100: #f2f3f4;
+  --color-neutral-200: #dfe1e3;
+  --color-neutral-300: #c2c5c9;
+  --color-neutral-400: #9aa0a6;
+  --color-neutral-500: #6d7176;
+  --color-neutral-600: #4a4d52;
+  --color-neutral-700: #34373b;
+  --color-neutral-800: #212326;
+  --color-neutral-900: #141517;
+  --color-neutral-950: #08090a;
+
+  /* Status still needs to read at a glance, so it stays desaturated but tinted. */
+  --color-positive: #8fd7b0;
+  --color-warning: #e0c88a;
+  --color-danger: #e08a8a;
+
+  /* One family, two cuts. Inter Tight sets headings and anything that acts as a
+     label; Inter carries the reading text. The old display face was wide and
+     condensed at once, which forced every heading to be shouted in caps to look
+     deliberate — that is where most of the interface's text came from. */
+  --font-display: 'Inter Tight', 'Inter', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* A five-step scale. Nothing in the interface picks a size outside it. */
+  --text-micro: 0.6875rem;   /* 11px — chips, meta, table cells */
+  --text-small: 0.8125rem;   /* 13px — secondary text, controls */
+  --text-body: 0.875rem;     /* 14px — default */
+  --text-title: 1.0625rem;   /* 17px — panel and modal titles */
+  --text-hero: 1.5rem;       /* 24px — the one heading per screen */
+
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.7), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-panel: 0 2px 6px rgba(0, 0, 0, 0.6), 0 24px 60px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.18), 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-base);
+    color: var(--color-ink);
+    overflow: hidden;
+    font-size: var(--text-body);
+    line-height: 1.45;
+    /* Inter's defaults leave gaps at small sizes and render lining figures that
+       jump around in a log or a memory readout. */
+    font-feature-settings: 'cv05' 1, 'tnum' 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display);
+    font-weight: 600;
+    /* Tight tracking is what makes this face read as a heading; the previous
+       system relied on uppercase and wide letter-spacing instead. */
+    letter-spacing: -0.015em;
+    line-height: 1.2;
+  }
+
+  h1 { font-size: var(--text-hero); }
+  h2 { font-size: var(--text-title); }
+  h3 { font-size: var(--text-body); }
+
+  /* Small caps labels stay, but only at one size and one weight, so they read as
+     a single kind of thing rather than as five competing headings. */
+  .label {
+    font-family: var(--font-display);
+    font-size: var(--text-micro);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.7);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  a[href],
+  summary,
+  select {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+/* Static backdrop: two soft pools of light and a fine grid. Painted once. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(70rem 40rem at 15% -10%, rgba(255, 255, 255, 0.07), transparent 60%),
+    radial-gradient(50rem 35rem at 110% 10%, rgba(255, 255, 255, 0.05), transparent 55%),
+    linear-gradient(180deg, #0b0c0e 0%, #08090a 60%, #060708 100%);
+}
+
+.app-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(70% 60% at 50% 0%, #000 0%, transparent 75%);
+}
+
+/* --- glass surfaces ------------------------------------------------------ */
+
+/* The cheap default: translucency plus a lit rim reads as glass without blur. */
+.glass,
+.panel {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(255, 255, 255, 0.03) 40%,
+    rgba(255, 255, 255, 0.015) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: var(--shadow-panel), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+.panel-inset {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* The window frame covers the whole viewport, so blurring it would mean
+   blurring every pixel on every repaint. It stays translucent but unblurred. */
+.app-frame {
+  background: rgba(10, 11, 13, 0.82);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Header and sidebar: glass edge, no filter. */
+.glass-bar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+/* Real blur, used sparingly: modals and floating panels. */
+.glass-heavy,
+.glass-acrylic {
+  background: rgba(14, 15, 17, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--shadow-panel), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.glass-card-hover {
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.glass-card-hover:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: var(--shadow-raised);
+}
+
+/* --- controls ------------------------------------------------------------ */
+
+/* The one bright element on screen: white on black, like a lit key. */
+.btn-primary {
+  background: linear-gradient(180deg, #ffffff 0%, #d8d8d8 100%);
+  color: #08090a;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: var(--shadow-raised), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: filter 180ms ease, box-shadow 180ms ease, transform 120ms ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: var(--shadow-glow), inset 0 1px 0 #ffffff;
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-ink);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-danger {
+  background: linear-gradient(180deg, #2a2023 0%, #1a1416 100%);
+  color: #f0d6d6;
+  border: 1px solid rgba(224, 138, 138, 0.45);
+  box-shadow: var(--shadow-raised), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
