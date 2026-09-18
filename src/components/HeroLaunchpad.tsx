@@ -18,6 +18,7 @@ interface HeroLaunchpadProps {
   onLaunch: () => void;
   onStop: () => void;
   onOpenSettings: () => void;
+  isInstalled: boolean;
 }
 
 export const HeroLaunchpad: React.FC<HeroLaunchpadProps> = ({
@@ -30,6 +31,7 @@ export const HeroLaunchpad: React.FC<HeroLaunchpadProps> = ({
   onLaunch,
   onStop,
   onOpenSettings,
+  isInstalled,
 }) => {
   const [showVersionDropdown, setShowVersionDropdown] = useState(false);
   const launchGroupRef = useRef<HTMLDivElement>(null);
@@ -158,10 +160,10 @@ export const HeroLaunchpad: React.FC<HeroLaunchpadProps> = ({
                     <Play size={18} fill="currentColor" />
                     <div className="flex flex-col text-left">
                       <span className="leading-tight text-xs font-bold uppercase">
-                        LAUNCH {instance.mcVersion}
+                        {isInstalled ? `PLAY ${instance.mcVersion}` : `INSTALL ${instance.mcVersion}`}
                       </span>
                       <span className="text-[10px] text-neutral-900 font-medium">
-                        {instance.loader.toUpperCase()} • Ready
+                        {isInstalled ? `${instance.loader.toUpperCase()} • Ready` : 'Download required files first'}
                       </span>
                     </div>
                   </>

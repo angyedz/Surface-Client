@@ -12,7 +12,6 @@ import {
   WeeklyPlaytimeDay,
   KeybindingItem,
   SkinProfile,
-  FriendItem,
   MinecraftVersion,
   PlayerAccount,
 } from './types/launcher';
@@ -26,11 +25,9 @@ import { InstanceManagerView } from './components/InstanceManagerView';
 import { LaunchSettingsView } from './components/LaunchSettingsView';
 import { ModpackCreatorModal } from './components/ModpackCreatorModal';
 import { RunningGameOverlay } from './components/RunningGameOverlay';
-import { ServerBrowserView } from './components/ServerBrowserView';
-import { FriendsPanel } from './components/FriendsPanel';
 import { SkinManagerView } from './components/SkinManagerView';
 import { NewsUpdatesView } from './components/NewsUpdatesView';
-import { DependencyCenterView } from './components/DependencyCenterView';
+import { InstalledModsView } from './components/InstalledModsView';
 import { AccountManagerModal } from './components/AccountManagerModal';
 import { analyzeInstanceDependencies, solveAllDependencies, resolveModDependency } from './services/dependencySolver';
 import { exportToMrpack, saveGeneratedFile } from './services/modpackService';
@@ -46,6 +43,9 @@ import {
   onLaunchProgress,
   onLaunchLog,
   onLaunchExit,
+  isInstanceReady,
+  isInstanceRunning,
+  discoverRunningInstances,
   listInstanceScreenshots,
   deleteScreenshotFile,
   toDisplayUrl,
@@ -61,7 +61,7 @@ import {
   saveString,
   StorageKeys,
 } from './services/storage';
-import { lookupMinecraftPlayer, createOfflineAccount } from './services/playerApi';
+import { createOfflineAccount } from './services/playerApi';
 import { User, Check, WifiOff, ShieldCheck, Plus, ArrowRight } from 'lucide-react';
 
 // Older builds shipped sample data; the versioned store drops it once.
@@ -189,18 +189,20 @@ export default function App() {
     loadJson<SkinProfile[]>(StorageKeys.skins, [])
   );
 
-  const [friends, setFriends] = useState<FriendItem[]>(() =>
-    loadJson<FriendItem[]>(StorageKeys.friends, [])
-  );
-
-  const [isFriendsOpen, setIsFriendsOpen] = useState(false);
 
   // Dynamic Minecraft versions fetched from Mojang Manifest
   const [mcVersions, setMcVersions] = useState<MinecraftVersion[]>([]);
   useEffect(() => {
-    fetchOfficialMinecraftVersions().then((v) => {
-      if (v && v.length > 0) setMcVersions(v);
-    });
+    let cancelled = false;
+    fetchOfficialMinecraftVersions()
+      .then((v) => {
+        if (cancelled) return;
+        setMcVersions(v);
+      })
+      .catch((error) => console.warn('Не удалось загрузить версии Minecraft:', error));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Active Tab State
@@ -221,6 +223,7 @@ export default function App() {
     playTimeSeconds: 0,
   });
   const [isGameConsoleOpen, setIsGameConsoleOpen] = useState(false);
+  const [isActiveVersionInstalled, setIsActiveVersionInstalled] = useState(false);
 
   // Toast Notification
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -234,7 +237,16 @@ export default function App() {
   const [systemSpecs, setSystemSpecs] = useState<SystemSpecs | null>(null);
   // Log ids must stay unique even when many lines arrive in the same millisecond.
   const logSequence = useRef(0);
+  const sessionRecordedRef = useRef(false);
+  const launchInFlightRef = useRef(false);
+  const activeInstanceRef = useRef<InstanceProfile | null>(null);
   const runningInTauri = isTauri();
+
+  useEffect(() => {
+    const isLinuxDesktop = runningInTauri && /Linux/i.test(navigator.userAgent);
+    document.documentElement.classList.toggle('surface-linux', isLinuxDesktop);
+    return () => document.documentElement.classList.remove('surface-linux');
+  }, [runningInTauri]);
 
   useEffect(() => {
     if (isTauri()) {
@@ -282,14 +294,28 @@ export default function App() {
     }).then((off) => unsubscribers.push(off));
 
     onLaunchExit((event) => {
-      setLaunchState((prev) => ({
-        ...prev,
-        status: event.crashed ? 'crashed' : 'finished',
-        stage: event.crashed
-          ? `Minecraft exited with code ${event.code ?? -1}`
-          : 'Minecraft closed.',
-        error: event.crashed ? `Exit code ${event.code ?? -1}` : undefined,
-      }));
+      setLaunchState((prev) => {
+        const currentInstance = activeInstanceRef.current;
+        if (prev.status === 'running' && !sessionRecordedRef.current && prev.playTimeSeconds >= 5 && currentInstance) {
+          sessionRecordedRef.current = true;
+          const minutesPlayed = Math.max(1, Math.round(prev.playTimeSeconds / 60));
+          const now = new Date();
+          const updatedInstance = {
+            ...currentInstance,
+            totalPlayTimeMinutes: (currentInstance.totalPlayTimeMinutes || 0) + minutesPlayed,
+            lastPlayed: `Today at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+          };
+          handleUpdateInstance(updatedInstance);
+          setWeeklyPlaytime((days) => recordSession(days, minutesPlayed, now));
+          showToast(`Session finished: +${minutesPlayed} min recorded`, 'info');
+        }
+        return {
+          ...prev,
+          status: event.crashed ? 'crashed' : 'finished',
+          stage: event.crashed ? `Minecraft exited with code ${event.code ?? -1}` : 'Minecraft closed.',
+          error: event.crashed ? `Exit code ${event.code ?? -1}` : undefined,
+        };
+      });
     }).then((off) => unsubscribers.push(off));
 
     return () => unsubscribers.forEach((off) => off());
@@ -307,6 +333,29 @@ export default function App() {
     }, 1000);
     return () => clearInterval(timer);
   }, [launchState.status]);
+
+  // Do not rely exclusively on the exit event: WebKit/Tauri can miss an
+  // event while the window is backgrounded. Poll the native process registry
+  // so the UI cannot remain stuck in "running" after Minecraft closes.
+  useEffect(() => {
+    if (!runningInTauri || launchState.status !== 'running' || !activeInstanceId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const running = await isInstanceRunning(activeInstanceId);
+        if (!running) {
+          setLaunchState((prev) => ({
+            ...prev,
+            status: 'finished',
+            stage: 'Minecraft closed.',
+          }));
+          setIsGameConsoleOpen(false);
+        }
+      } catch {
+        // A transient bridge failure must not falsely mark the game stopped.
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [runningInTauri, launchState.status, activeInstanceId]);
 
   // Screenshots come from the instance folder the game writes into.
   useEffect(() => {
@@ -356,11 +405,6 @@ export default function App() {
     saveJson(StorageKeys.skins, skins);
   }, [skins]);
 
-  // Sync friends to LocalStorage
-  useEffect(() => {
-    saveJson(StorageKeys.friends, friends);
-  }, [friends]);
-
   // Sync username
   useEffect(() => {
     saveString(StorageKeys.username, username);
@@ -379,29 +423,49 @@ export default function App() {
   // Active instance reference
   const activeInstance = instances.find((i) => i.id === activeInstanceId) || instances[0] || null;
   const activeSkin = skins.find((s) => s.active) || skins[0] || null;
+  activeInstanceRef.current = activeInstance;
 
-  const handleAddFriend = async (newFriendUsername: string) => {
-    const clean = newFriendUsername.trim();
-    if (!clean) return;
-    if (friends.some((f) => f.username.toLowerCase() === clean.toLowerCase())) {
-      showToast(`Already friends with ${clean}`, 'info');
+  useEffect(() => {
+    if (!runningInTauri || instances.length === 0) return;
+    let cancelled = false;
+    discoverRunningInstances(instances.map((instance) => instance.id)).then((runningIds) => {
+      if (cancelled || runningIds.length === 0) return;
+      if (activeInstanceId && runningIds.includes(activeInstanceId)) {
+        setLaunchState((previous) => previous.status === 'idle' || previous.status === 'finished'
+          ? { ...previous, status: 'running', stage: 'Minecraft is running (restored)', progress: 100 }
+          : previous
+        );
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [runningInTauri, instances, activeInstanceId]);
+
+  useEffect(() => {
+    if (!runningInTauri || !activeInstance) {
+      setIsActiveVersionInstalled(false);
       return;
     }
-
-    const profile = await lookupMinecraftPlayer(clean);
-    const resolvedName = profile?.username || clean;
-
-    const newFriend: FriendItem = {
-      id: `f_${Date.now()}`,
-      username: resolvedName,
-      avatarUrl: profile?.avatarUrl || `https://mc-heads.net/avatar/${resolvedName}/64`,
-      status: 'online_launcher',
-      gameDetails: 'Online in Surface Client',
-      rank: profile && profile.rawId !== 'offline' ? 'VERIFIED' : 'PLAYER',
+    let cancelled = false;
+    const refresh = async () => {
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt += 1) {
+        try {
+          const status = await isInstanceReady(activeInstance.id);
+          console.info('[Surface] instance install status:', status);
+          if (!cancelled) setIsActiveVersionInstalled(status);
+          return;
+        } catch (error) {
+          if (attempt === 2) {
+            console.warn('Could not verify installed Minecraft version:', error);
+            if (!cancelled) setIsActiveVersionInstalled(false);
+          } else {
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
+          }
+        }
+      }
     };
-    setFriends((prev) => [newFriend, ...prev]);
-    showToast(`Added ${resolvedName} to friends list!`, 'success');
-  };
+    refresh();
+    return () => { cancelled = true; };
+  }, [runningInTauri, activeInstance?.mcVersion, launchState.status]);
 
   const handleQuickConnectServer = (ip: string) => {
     if (!activeInstance) {
@@ -457,6 +521,7 @@ export default function App() {
 
   // Launch Game Lifecycle with automatic silent background dependency resolution
   const handleLaunchGame = async () => {
+    if (launchInFlightRef.current) return;
     if (!activeInstance) {
       showToast('Please create a Minecraft profile first!', 'error');
       setIsCreatingModpack(true);
@@ -471,19 +536,38 @@ export default function App() {
       setIsGameConsoleOpen(true);
       return;
     }
+    launchInFlightRef.current = true;
 
-    // Auto-resolve any missing dependencies under the hood before launching
-    const currentAnalysis = analyzeInstanceDependencies(activeInstance);
+    // Auto-resolve required dependencies before launching. Keep the resolved
+    // instance locally because state updates are asynchronous.
+    let instanceToLaunch = activeInstance;
+    const currentAnalysis = analyzeInstanceDependencies(instanceToLaunch);
     if (!currentAnalysis.isHealthy && currentAnalysis.issues.some((i) => i.type === 'missing_required')) {
       try {
-        const solved = await solveAllDependencies(activeInstance);
+        const solved = await solveAllDependencies(instanceToLaunch);
+        instanceToLaunch = solved.updatedInstance;
         handleUpdateInstance(solved.updatedInstance);
       } catch (err) {
         console.error('Auto dependency solver failed:', err);
       }
     }
 
-    setIsGameConsoleOpen(true);
+    const finalAnalysis = analyzeInstanceDependencies(instanceToLaunch);
+    const blockingIssues = finalAnalysis.issues.filter((issue) => issue.severity === 'error');
+    if (blockingIssues.length > 0) {
+      const first = blockingIssues[0];
+      setLaunchState((prev) => ({
+        ...prev,
+        status: 'idle',
+        stage: 'Launch blocked by mod compatibility',
+        error: first.message,
+      }));
+      setActiveTab('modrinth');
+      showToast(`${first.message} Choose a compatible version in Modrinth.`, 'error');
+      launchInFlightRef.current = false;
+      return;
+    }
+
     setLaunchState({
       status: 'verifying_dependencies',
       stage: 'Preparing the instance',
@@ -491,17 +575,31 @@ export default function App() {
       logs: [],
       playTimeSeconds: 0,
     });
+    sessionRecordedRef.current = false;
 
     try {
       // Mod jars live on disk, so the folder has to match the profile before
       // the loader scans it.
-      const report = await syncInstanceMods(activeInstance);
+      const report = await syncInstanceMods(instanceToLaunch);
       if (report.failed.length > 0) {
         showToast(`${report.failed.length} mod(s) could not be downloaded`, 'error');
       }
 
-      const game = await launchInstance(toLaunchOptions(activeInstance, activeAccount, username));
-      setLaunchState((prev) => ({ ...prev, pid: game.pid }));
+      const game = await launchInstance(toLaunchOptions(instanceToLaunch, activeAccount, username));
+      setIsActiveVersionInstalled(true);
+      const processRunning = await isInstanceRunning(instanceToLaunch.id);
+      if (!processRunning) {
+        setLaunchState((prev) => ({
+          ...prev,
+          status: 'crashed',
+          stage: 'Minecraft exited before the console opened.',
+          pid: game.pid,
+        }));
+        showToast('Minecraft closed immediately. Check the process logs.', 'error');
+        return;
+      }
+      setLaunchState((prev) => ({ ...prev, status: 'running', pid: game.pid }));
+      setIsGameConsoleOpen(true);
     } catch (err: any) {
       const message =
         err instanceof CoreUnavailableError
@@ -514,6 +612,8 @@ export default function App() {
         error: message,
       }));
       showToast(message, 'error');
+    } finally {
+      launchInFlightRef.current = false;
     }
   };
 
@@ -535,6 +635,7 @@ export default function App() {
     }));
 
     if (elapsedSeconds >= 5) {
+      sessionRecordedRef.current = true;
       const minutesPlayed = Math.max(1, Math.round(elapsedSeconds / 60));
       const now = new Date();
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -747,24 +848,9 @@ export default function App() {
       if (primaryMod) {
         newModsToAdd.push(primaryMod);
       } else {
-        newModsToAdd.push({
-          id: `mod-${project.slug}-${Date.now()}`,
-          modrinthId: project.project_id,
-          slug: project.slug,
-          title: project.title,
-          summary: project.description,
-          version: version?.version_number || 'latest',
-          versionNumber: version?.version_number || '1.0.0',
-          fileName: `${project.slug}-${version?.version_number || '1.0.0'}.jar`,
-          fileSize: 1024 * 1024 * 2,
-          iconUrl: project.icon_url || undefined,
-          enabled: true,
-          loaders: [activeInstance.loader],
-          gameVersions: [activeInstance.mcVersion],
-          dependencies: [],
-          dateInstalled: new Date().toISOString().split('T')[0],
-          author: project.author,
-        });
+        throw new Error(
+          `No compatible downloadable version found for ${project.title} on Minecraft ${activeInstance.mcVersion}.`
+        );
       }
 
       // 2. Automatically solve and download dependencies in the background!
@@ -801,7 +887,7 @@ export default function App() {
       <motion.div
         initial={{ opacity: 0, scale: 0.99 }}
         animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.35, ease: 'easeOut' }}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
         className={`relative z-10 flex flex-col h-full w-full ${
           runningInTauri
             ? 'rounded-none border-0'
@@ -814,12 +900,10 @@ export default function App() {
           activeInstance={activeInstance}
           onSelectInstance={(inst) => setActiveInstanceId(inst.id)}
           launchStatus={launchState.status}
-          onOpenConsole={() => setIsGameConsoleOpen(true)}
+          onOpenConsole={() => {
+            if (launchState.status === 'running') setIsGameConsoleOpen(true);
+          }}
           onQuickConnectServer={handleQuickConnectServer}
-          onToggleFriends={() => setIsFriendsOpen((prev) => !prev)}
-          isFriendsOpen={isFriendsOpen}
-          friendsOnlineCount={friends.filter((f) => f.status !== 'offline').length}
-          unreadFriendsCount={friends.reduce((acc, f) => acc + (f.unreadCount || 0), 0)}
           username={username}
           avatarUrl={activeAccount?.avatarUrl || activeSkin?.skinUrl}
           accounts={accounts}
@@ -836,7 +920,7 @@ export default function App() {
             activeTab={activeTab}
             onSelectTab={(tab) => {
               if (tab === 'console') {
-                setIsGameConsoleOpen(true);
+                if (launchState.status === 'running') setIsGameConsoleOpen(true);
               } else {
                 setActiveTab(tab);
               }
@@ -860,7 +944,10 @@ export default function App() {
                 onStop={handleStopGame}
                 onOpenMods={() => setActiveTab('modrinth')}
                 onOpenSettings={() => setActiveTab('settings')}
-                onOpenConsole={() => setIsGameConsoleOpen(true)}
+                isInstalled={isActiveVersionInstalled}
+                onOpenConsole={() => {
+                  if (launchState.status === 'running') setIsGameConsoleOpen(true);
+                }}
                 onExportMrpack={handleExportActiveMrpack}
                 screenshots={screenshots}
                 onDeleteScreenshot={handleDeleteScreenshot}
@@ -891,18 +978,11 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'dependency_solver' && (
-              <DependencyCenterView
+            {activeTab === 'installed_mods' && (
+              <InstalledModsView
                 instance={activeInstance}
                 onUpdateInstance={handleUpdateInstance}
-                onOpenModrinth={() => setActiveTab('modrinth')}
-              />
-            )}
-
-            {activeTab === 'servers' && (
-              <ServerBrowserView
-                activeInstance={activeInstance}
-                onLaunchServer={handleQuickConnectServer}
+                onUninstall={handleUninstallModFromInstance}
               />
             )}
 
@@ -937,16 +1017,6 @@ export default function App() {
             )}
           </main>
         </div>
-
-        {/* Friends Overlay Panel */}
-        <FriendsPanel
-          isOpen={isFriendsOpen}
-          onClose={() => setIsFriendsOpen(false)}
-          username={username}
-          avatarUrl={activeSkin?.skinUrl}
-          friends={friends}
-          onAddFriend={handleAddFriend}
-        />
 
         {/* Modpack Creation Modal */}
         {isCreatingModpack && (

@@ -4,6 +4,8 @@ use crate::error::{LauncherError, Result};
 use crate::net;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub const VERSION_MANIFEST_URL: &str =
     "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
@@ -260,14 +262,37 @@ async fn fetch_vanilla_version(version_id: &str) -> Result<VersionJson> {
         .ok_or_else(|| {
             LauncherError::msg(format!("Minecraft version {version_id} is not in Mojang's manifest"))
         })?;
-    net::get_json(&entry.url).await
+    match net::get_json(&entry.url).await {
+        Ok(version) => Ok(version),
+        Err(primary) => {
+            // Some Fedora DNS/proxy setups cannot resolve piston-meta, while
+            // Mojang's legacy metadata host is still reachable. The manifest
+            // contains a content-addressed path, so only the host changes.
+            let fallback_url = entry
+                .url
+                .replace("https://piston-meta.mojang.com/", "https://launchermeta.mojang.com/");
+            if fallback_url != entry.url {
+                if let Ok(version) = net::get_json(&fallback_url).await {
+                    return Ok(version);
+                }
+            }
+            Err(LauncherError::msg(format!(
+                "could not download Minecraft {version_id} metadata from Mojang: {primary}. Check DNS/network access to piston-meta.mojang.com"
+            )))
+        }
+    }
 }
 
 async fn fetch_loader_profile(
     loader: &str,
     mc_version: &str,
     loader_version: &str,
+    vanilla: &VersionJson,
 ) -> Result<VersionJson> {
+    if loader == "forge" {
+        return fetch_forge_profile(mc_version, loader_version, vanilla).await;
+    }
+
     let url = match loader {
         "fabric" => format!(
             "https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader_version}/profile/json"
@@ -283,6 +308,207 @@ async fn fetch_loader_profile(
         }
     };
     net::get_json(&url).await
+}
+
+/// Forge is different from Fabric/Quilt: it publishes an installer rather than
+/// a ready-made launcher profile. Run that official installer in an isolated
+/// SurfaceClient directory, then consume the profile it generated. This keeps
+/// Forge versions dynamic and avoids writing anything into the user's vanilla
+/// Minecraft directory.
+async fn fetch_forge_profile(
+    mc_version: &str,
+    forge_version: &str,
+    vanilla: &VersionJson,
+) -> Result<VersionJson> {
+    let coordinate = format!("{mc_version}-{forge_version}");
+    let installer_url = format!(
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/{coordinate}/forge-{coordinate}-installer.jar"
+    );
+    let root = crate::paths::root_dir()?.join("forge").join(&coordinate);
+    let installer = root.join(format!("forge-{coordinate}-installer.jar"));
+    let generated = find_forge_profile(&root)?;
+    let processors_missing = !forge_client_outputs_exist(&root, mc_version, forge_version);
+
+    if generated.is_none() || processors_missing {
+        eprintln!("[Surface] Forge: downloading installer for Minecraft {mc_version}, Forge {forge_version}");
+        crate::paths::ensure_dir(&root).await?;
+
+        // Forge's official installer validates the vanilla launcher profile in
+        // its target directory before it creates the Forge profile. The
+        // launcher normally owns this file already, but the isolated Forge
+        // workspace must receive its own copy.
+        let vanilla_dir = root.join("versions").join(mc_version);
+        tokio::fs::create_dir_all(&vanilla_dir).await?;
+        tokio::fs::write(
+            vanilla_dir.join(format!("{mc_version}.json")),
+            serde_json::to_vec_pretty(vanilla)?,
+        )
+        .await?;
+        // The Forge installer also checks the launcher profile registry, not
+        // only versions/<id>/<id>.json. Keep this synthetic profile isolated
+        // to the installer workspace; never touch the user's real launcher
+        // configuration.
+        let launcher_profiles = serde_json::json!({
+            "profiles": {
+                "surface-client": {
+                    "name": "Surface Client",
+                    "type": "custom",
+                    "lastVersionId": mc_version
+                }
+            },
+            "selectedProfile": "surface-client"
+        });
+        tokio::fs::write(
+            root.join("launcher_profiles.json"),
+            serde_json::to_vec_pretty(&launcher_profiles)?,
+        )
+        .await?;
+        let vanilla_jar = vanilla
+            .downloads
+            .as_ref()
+            .and_then(|downloads| downloads.client.as_ref())
+            .ok_or_else(|| LauncherError::msg(format!("Minecraft {mc_version} metadata has no client download")))?;
+        net::download_file(
+            &vanilla_jar.url,
+            &vanilla_dir.join(format!("{mc_version}.jar")),
+            vanilla_jar.sha1.as_deref(),
+        )
+        .await?;
+
+        net::download_file(&installer_url, &installer, None).await?;
+
+        eprintln!("[Surface] Forge: running installer");
+        let mut installer_process = tokio::process::Command::new("java");
+        installer_process.args(net::java_proxy_args());
+        installer_process
+            .arg("-jar")
+            .arg(&installer)
+            .arg("--installClient")
+            .arg(&root)
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(300), installer_process.output())
+            .await
+            .map_err(|_| LauncherError::msg(format!(
+                "Forge installer timed out after 5 minutes for Minecraft {mc_version} / Forge {forge_version}"
+            )))?
+            .map_err(|error| LauncherError::msg(format!(
+                "Forge installer could not start Java: {error}. Install a compatible Java runtime and try again."
+            )))?;
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let details = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+            return Err(LauncherError::msg(format!(
+                "Forge installer exited with {} for Minecraft {mc_version} / Forge {forge_version}: {}",
+                output.status,
+                if details.is_empty() { "installer returned no diagnostic output" } else { details }
+            )));
+        }
+        eprintln!("[Surface] Forge: installer finished, reading generated profile");
+    }
+
+    let profile_path = find_forge_profile(&root)?.ok_or_else(|| {
+        LauncherError::msg(format!(
+            "Forge installer completed but did not produce a launcher profile for {mc_version} / {forge_version}"
+        ))
+    })?;
+    copy_generated_libraries(&root).await?;
+    let bytes = tokio::fs::read(&profile_path).await?;
+    let mut profile: VersionJson = serde_json::from_slice(&bytes)?;
+
+    // Installer profiles occasionally omit the repository on individual
+    // libraries. Forge's Maven repository is the authoritative fallback.
+    for library in &mut profile.libraries {
+        if library.url.is_none() && library.downloads.is_none() {
+            library.url = Some("https://maven.minecraftforge.net/".to_string());
+        }
+    }
+    Ok(profile)
+}
+
+fn forge_client_outputs_exist(root: &Path, mc_version: &str, forge_version: &str) -> bool {
+    let libraries = root.join("libraries");
+    let mut found_srg = false;
+    let mut found_extra = false;
+    let mut found_forge_client = false;
+    let mut stack = vec![libraries];
+    while let Some(directory) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+            found_srg |= name.ends_with("-srg.jar") && name.contains(mc_version);
+            found_extra |= name.ends_with("-extra.jar") && name.contains(mc_version);
+            found_forge_client |= name == format!("forge-{mc_version}-{forge_version}-client.jar");
+        }
+    }
+    found_srg && found_extra && found_forge_client
+}
+
+async fn copy_generated_libraries(forge_root: &Path) -> Result<()> {
+    let source = forge_root.join("libraries");
+    if !source.exists() {
+        return Ok(());
+    }
+    let destination = crate::paths::libraries_dir()?;
+    copy_directory_contents(&source, &destination).await
+}
+
+async fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(destination).await?;
+    let mut entries = tokio::fs::read_dir(source).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            Box::pin(copy_directory_contents(&source_path, &destination_path)).await?;
+        } else {
+            let needs_copy = match tokio::fs::metadata(&destination_path).await {
+                Ok(metadata) => metadata.len() != tokio::fs::metadata(&source_path).await?.len(),
+                Err(_) => true,
+            };
+            if needs_copy {
+                tokio::fs::copy(&source_path, &destination_path).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn find_forge_profile(root: &Path) -> Result<Option<PathBuf>> {
+    if !root.exists() {
+        return Ok(None);
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else { continue };
+            let has_forge_loader = value.get("id").and_then(Value::as_str)
+                .map(|id| id.contains("forge"))
+                .unwrap_or(false)
+                || value.get("mainClass").and_then(Value::as_str)
+                    .map(|main| main.contains("forge"))
+                    .unwrap_or(false);
+            if has_forge_loader && value.get("libraries").is_some() {
+                return Ok(Some(path));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn merge(child: VersionJson, parent: VersionJson) -> VersionJson {
@@ -341,7 +567,7 @@ pub async fn resolve(
         )));
     }
 
-    let profile = fetch_loader_profile(loader, mc_version, loader_version).await?;
+    let profile = fetch_loader_profile(loader, mc_version, loader_version, &vanilla).await?;
     Ok(ResolvedVersion {
         vanilla_id: vanilla.id.clone(),
         json: merge(profile, vanilla),

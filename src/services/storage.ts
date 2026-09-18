@@ -1,7 +1,7 @@
 /**
  * Versioned local storage for launcher state.
  *
- * Earlier builds shipped sample instances, friends and screenshots that were
+ * Earlier builds shipped sample instances and screenshots that were
  * later removed by matching on their contents. That guesswork is replaced by a
  * schema version: when it changes, everything the launcher owns is cleared once
  * and rebuilt from real data.
@@ -18,7 +18,6 @@ export const StorageKeys = {
   activeAccount: 'surface_active_account_id',
   username: 'surface_username',
   skins: 'surface_skins',
-  friends: 'surface_friends_list',
   keybindings: 'surface_keybindings',
   weeklyPlaytime: 'surface_weekly_playtime',
   newsLikes: 'surface_news_user_likes',

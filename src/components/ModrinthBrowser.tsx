@@ -64,6 +64,8 @@ export const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
 
   const [projects, setProjects] = useState<ModrinthProject[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [searchOffset, setSearchOffset] = useState(0);
   const [totalHits, setTotalHits] = useState(0);
 
   // Selected project for detail modal
@@ -72,8 +74,9 @@ export const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
   const [isLoadingVersions, setIsLoadingVersions] = useState(false);
 
   // Search execution
-  const executeSearch = async () => {
-    setIsLoading(true);
+  const executeSearch = async (offset = 0, append = false) => {
+    if (append) setIsLoadingMore(true);
+    else setIsLoading(true);
     try {
       const filters: SearchFilters = {
         query: searchQuery,
@@ -83,23 +86,32 @@ export const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
         category: filterCategory === 'all' ? undefined : filterCategory,
         sortBy,
         limit: 24,
+        offset,
       };
       const res = await searchModrinthProjects(filters);
-      setProjects(res.hits);
+      setProjects((previous) => (append ? [...previous, ...res.hits] : res.hits));
+      setSearchOffset(offset);
       setTotalHits(res.total_hits);
     } catch (e) {
       console.error(e);
     } finally {
-      setIsLoading(false);
+      if (append) setIsLoadingMore(false);
+      else setIsLoading(false);
     }
   };
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      executeSearch();
+      setSearchOffset(0);
+      executeSearch(0, false);
     }, 280);
     return () => clearTimeout(timer);
   }, [searchQuery, projectType, filterVersion, filterLoader, filterCategory, sortBy]);
+
+  const loadMoreProjects = () => {
+    if (isLoading || isLoadingMore || projects.length >= totalHits) return;
+    executeSearch(searchOffset + 24, true);
+  };
 
   // Load project versions when opened in modal
   const handleOpenProjectModal = async (project: ModrinthProject) => {
@@ -517,13 +529,26 @@ export const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
             })}
           </div>
         )}
+
+        {projects.length > 0 && projects.length < totalHits && (
+          <div className="flex justify-center pt-6">
+            <button
+              type="button"
+              onClick={loadMoreProjects}
+              disabled={isLoadingMore}
+              className="px-5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-700 text-xs font-semibold text-neutral-200 hover:bg-neutral-800 disabled:opacity-50 transition-colors"
+            >
+              {isLoadingMore ? 'Loading more…' : `Load more (${projects.length} / ${totalHits})`}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Mod Detail Modal */}
       {selectedProject && (
         <div
           className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4"
-          onClick={(event) => {
+          onMouseDown={(event) => {
             // Only a click on the backdrop itself closes the dialog.
             if (event.target === event.currentTarget) setSelectedProject(null);
           }}

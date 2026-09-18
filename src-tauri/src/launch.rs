@@ -32,6 +32,8 @@ pub struct LaunchOptions {
     #[serde(default)]
     pub java_path: String,
     #[serde(default)]
+    pub java_version: Option<u32>,
+    #[serde(default)]
     pub resolution_width: Option<u32>,
     #[serde(default)]
     pub resolution_height: Option<u32>,
@@ -287,11 +289,11 @@ pub async fn launch(
     installed: &InstalledVersion,
     reporter: Reporter,
 ) -> Result<LaunchedGame> {
-    let required_major = version
+    let required_major = options.java_version.unwrap_or_else(|| version
         .java_version
         .as_ref()
         .and_then(|j| j.major_version)
-        .unwrap_or(8);
+        .unwrap_or(8));
 
     let java_binary = if options.java_path.is_empty() || options.java_path == "auto" {
         let found = java::select_for(required_major).ok_or_else(|| {
@@ -422,5 +424,30 @@ pub async fn stop(instance_id: &str) -> Result<bool> {
 }
 
 pub fn is_running(instance_id: &str) -> bool {
-    with_running(|map| map.contains_key(instance_id))
+    if with_running(|map| map.contains_key(instance_id)) {
+        return true;
+    }
+    discover_running_instances(&[instance_id.to_string()]).iter().any(|id| id == instance_id)
+}
+
+/// Finds Minecraft processes that survived a launcher restart. The game
+/// command always contains the instance-specific --gameDir path.
+pub fn discover_running_instances(instance_ids: &[String]) -> Vec<String> {
+    let mut system = sysinfo::System::new_all();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    instance_ids
+        .iter()
+        .filter(|instance_id| {
+            let Ok(game_dir) = crate::paths::instance_game_dir(instance_id) else { return false; };
+            let needle = game_dir.to_string_lossy();
+            system.processes().values().any(|process| {
+                let name = process.name().to_string_lossy().to_lowercase();
+                let command = process.cmd().iter().map(|part| part.to_string_lossy()).collect::<Vec<_>>().join(" ");
+                (name == "java" || name == "javaw" || command.contains("net.minecraft"))
+                    && command.contains("--gameDir")
+                    && command.contains(needle.as_ref())
+            })
+        })
+        .cloned()
+        .collect()
 }

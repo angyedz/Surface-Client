@@ -186,7 +186,7 @@ export const ScreenshotGallery: React.FC<ScreenshotGalleryProps> = ({
       {selectedScreenshot && (
         <div
           className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4"
-          onClick={(event) => {
+          onMouseDown={(event) => {
             // Only a click on the backdrop itself closes the dialog.
             if (event.target === event.currentTarget) setSelectedScreenshot(null);
           }}

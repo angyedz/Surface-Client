@@ -6,7 +6,6 @@ import {
   Minus,
   Maximize2,
   X,
-  Users,
   Edit2,
   Plus,
 } from 'lucide-react';
@@ -28,10 +27,6 @@ interface TopTitleBarProps {
   launchStatus: LaunchStatus;
   onOpenConsole: () => void;
   onQuickConnectServer: (ip: string) => void;
-  onToggleFriends?: () => void;
-  isFriendsOpen?: boolean;
-  friendsOnlineCount?: number;
-  unreadFriendsCount?: number;
   username?: string;
   avatarUrl?: string;
   onChangeUsername?: (name: string) => void;
@@ -49,10 +44,6 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
   launchStatus,
   onOpenConsole,
   onQuickConnectServer,
-  onToggleFriends,
-  isFriendsOpen,
-  friendsOnlineCount = 0,
-  unreadFriendsCount = 0,
   username = 'Player',
   avatarUrl,
   onChangeUsername,
@@ -83,7 +74,7 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
   const isRunning = launchStatus === 'running';
 
   return (
-    <header className="relative h-12 glass-bar border-b px-4 flex items-center justify-between z-30 select-none">
+    <header className="relative h-20 glass-bar border-b px-4 flex items-center justify-between z-30 select-none">
       {/*
         The drag region is its own layer behind the controls. On the whole
         header it swallows every mousedown, so buttons inside it started a
@@ -94,10 +85,12 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
       <div className="relative z-10 flex items-center gap-3">
         {/* Logo */}
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg bg-primary-500/20 border border-primary-500/30 flex items-center justify-center">
-            <span className="font-mono font-bold text-[11px] text-primary-400">SC</span>
-          </div>
-          <span className="font-semibold text-xs tracking-wide text-neutral-200">
+          <img
+            src="/surface.jpeg"
+            alt="Surface Client"
+            className="w-16 h-16 rounded-full border border-white/20 object-cover"
+          />
+          <span className="font-display font-bold text-xl tracking-tight text-neutral-100 leading-none">
             Surface Client
           </span>
         </div>
@@ -193,7 +186,7 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
         ))}
       </div>
 
-      {/* Right Controls: Friends, Console & Window Controls */}
+      {/* Right Controls: Account, Console & Window Controls */}
       <div className="relative z-10 flex items-center gap-2">
         {/* Player Profile & Account Switcher Chip */}
         <div className="relative" ref={accountMenuRef}>
@@ -311,30 +304,6 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
             </div>
           )}
         </div>
-
-        {/* Friends Panel Trigger Button */}
-        {onToggleFriends && (
-          <button
-            onClick={onToggleFriends}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition-colors cursor-pointer ${
-              isFriendsOpen
-                ? 'bg-primary-500/20 text-primary-300 border-primary-500/40 shadow-sm'
-                : 'bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white border-white/5'
-            }`}
-            title="Friends & Social" aria-label="Friends & Social"
-          >
-            <div className="relative">
-              <Users size={14} className={isFriendsOpen ? 'text-primary-400' : 'text-neutral-400'} />
-              {unreadFriendsCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-primary-400 animate-ping" />
-              )}
-            </div>
-            <span className="hidden sm:inline font-medium text-[11px]">Friends</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-primary-500/20 text-primary-400 text-[10px] font-mono font-bold">
-              {friendsOnlineCount}
-            </span>
-          </button>
-        )}
 
         {/* Live Console Button */}
         <button

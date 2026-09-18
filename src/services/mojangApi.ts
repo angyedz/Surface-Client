@@ -6,6 +6,7 @@
  */
 
 import { MinecraftVersion, ModLoader } from '../types/launcher';
+import { isTauri, listForgeVersions } from './launcherCore';
 
 const MOJANG_MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest_v2.json';
 const FABRIC_META = 'https://meta.fabricmc.net/v2/versions';
@@ -183,6 +184,9 @@ export async function fetchNeoForgeVersions(mcVersion?: string): Promise<string[
 
 /** Forge's promotion feed lists a recommended and latest build per release. */
 export async function fetchForgeVersions(mcVersion?: string): Promise<string[]> {
+  if (isTauri()) {
+    return listForgeVersions(mcVersion);
+  }
   return cached(`surface_cache_forge_${mcVersion || 'all'}`, async () => {
     const data = await fetchJson<{ promos: Record<string, string> }>(FORGE_PROMOTIONS);
     const entries = Object.entries(data.promos);

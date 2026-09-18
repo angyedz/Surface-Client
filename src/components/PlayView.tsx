@@ -30,6 +30,7 @@ interface PlayViewProps {
   onStop: () => void;
   onOpenMods: () => void;
   onOpenSettings: () => void;
+  isInstalled: boolean;
   onOpenConsole: () => void;
   onExportMrpack: () => void;
   screenshots: InGameScreenshot[];
@@ -51,6 +52,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   onStop,
   onOpenMods,
   onOpenSettings,
+  isInstalled,
   onOpenConsole,
   onExportMrpack,
   screenshots,
@@ -113,6 +115,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
         onLaunch={onLaunch}
         onStop={onStop}
         onOpenSettings={onOpenSettings}
+        isInstalled={isInstalled}
       />
 
       {/* 2. In-Game Window when running */}
@@ -285,7 +288,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
         {/* TAB 2: PLAYTIME ANALYTICS */}
         {activeTab === 'analytics' && (
           <div className="rounded-2xl p-4 border border-white/5 bg-neutral-900/40">
-            <PlaytimeChart data={weeklyPlaytime} />
+            <PlaytimeChart data={weeklyPlaytime} launchStatus={launchStatus} />
           </div>
         )}
 

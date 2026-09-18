@@ -3,6 +3,7 @@
 use crate::error::Result;
 use crate::net;
 use crate::paths;
+use crate::logging;
 use serde::{Deserialize, Serialize};
 
 const DISABLED_SUFFIX: &str = ".disabled";
@@ -70,10 +71,14 @@ pub async fn sync_mods(instance_id: &str, mods: Vec<ModFile>) -> Result<ModSyncR
         }
 
         match net::download_file(&entry.url, &target, entry.sha1.as_deref()).await {
-            Ok(_) => report.downloaded.push(target_name),
-            Err(error) => report
-                .failed
-                .push(format!("{}: {error}", entry.file_name)),
+            Ok(_) => {
+                logging::write("ModSync", "INFO", &format!("Downloaded {} for instance {}", entry.file_name, instance_id));
+                report.downloaded.push(target_name)
+            }
+            Err(error) => {
+                logging::write("ModSync", "ERROR", &format!("Failed {} for instance {}: {error}", entry.file_name, instance_id));
+                report.failed.push(format!("{}: {error}", entry.file_name))
+            }
         }
     }
 
@@ -131,6 +136,19 @@ pub async fn list_screenshots(instance_id: &str) -> Result<Vec<Screenshot>> {
 
     screenshots.sort_by(|a, b| b.taken_at.cmp(&a.taken_at));
     Ok(screenshots)
+}
+
+pub async fn list_mod_files(instance_id: &str) -> Result<Vec<String>> {
+    let dir = paths::instance_mods_dir(instance_id)?;
+    if !dir.exists() { return Ok(Vec::new()); }
+    let mut files = Vec::new();
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".jar") || name.ends_with(".jar.disabled") { files.push(name); }
+    }
+    files.sort();
+    Ok(files)
 }
 
 pub async fn delete_screenshot(path: String) -> Result<()> {

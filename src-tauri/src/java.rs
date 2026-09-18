@@ -1,6 +1,7 @@
 //! Discovery of Java runtimes installed on the host.
 
 use crate::error::{LauncherError, Result};
+use crate::{net, paths};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -145,20 +146,58 @@ pub fn discover() -> Vec<JavaInstallation> {
     found
 }
 
-/// Picks the runtime that best matches the major version a release requires.
+/// Picks the runtime that exactly matches the major version a release requires.
 ///
-/// An exact match wins; otherwise the closest newer runtime is used, since
-/// Minecraft refuses to start on a runtime older than it was built for.
+/// Mod loaders are stricter than vanilla Minecraft: older Forge versions can
+/// fail during module resolution on a newer JVM, so silently substituting Java
+/// 25 for a Java 17 instance is unsafe.
 pub fn select_for(required_major: u32) -> Option<JavaInstallation> {
     let installations = discover();
-    installations
-        .iter()
-        .find(|j| j.major == required_major)
-        .or_else(|| {
-            installations
-                .iter()
-                .filter(|j| j.major > required_major)
-                .min_by_key(|j| j.major)
-        })
-        .cloned()
+    installations.iter().find(|j| j.major == required_major).cloned()
+}
+
+#[derive(serde::Deserialize)]
+struct AdoptiumAsset {
+    binary: AdoptiumBinary,
+}
+
+#[derive(serde::Deserialize)]
+struct AdoptiumBinary {
+    package: AdoptiumPackage,
+}
+
+#[derive(serde::Deserialize)]
+struct AdoptiumPackage {
+    link: String,
+}
+
+pub async fn install(major: u32) -> Result<JavaInstallation> {
+    if !matches!(major, 8 | 17 | 21 | 25) {
+        return Err(LauncherError::msg(format!("unsupported Java version: {major}")));
+    }
+    let api = format!(
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture=x64&os=linux&image_type=jdk&vendor=eclipse"
+    );
+    let assets: Vec<AdoptiumAsset> = net::get_json(&api).await?;
+    let link = assets.first().ok_or_else(|| LauncherError::msg(format!("Java {major} is not available for this system")))?.binary.package.link.clone();
+    let root = paths::root_dir()?.join("jvm");
+    let archive = root.join(format!("java-{major}.tar.gz"));
+    let target = root.join(format!("java-{major}"));
+    tokio::fs::create_dir_all(&root).await?;
+    tokio::fs::create_dir_all(&target).await?;
+    net::download_file(&link, &archive, None).await?;
+
+    let status = tokio::process::Command::new("tar")
+        .args(["-xzf"])
+        .arg(&archive)
+        .arg("--strip-components=1")
+        .arg("-C")
+        .arg(&target)
+        .status()
+        .await?;
+    if !status.success() {
+        return Err(LauncherError::msg(format!("could not extract Java {major}")));
+    }
+    let binary = target.join("bin/java");
+    probe(&binary)
 }

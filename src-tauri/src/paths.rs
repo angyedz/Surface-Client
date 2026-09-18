@@ -49,6 +49,10 @@ pub fn instance_screenshots_dir(instance_id: &str) -> Result<PathBuf> {
     Ok(instance_game_dir(instance_id)?.join("screenshots"))
 }
 
+pub fn instance_install_marker(instance_id: &str) -> Result<PathBuf> {
+    Ok(instance_game_dir(instance_id)?.join(".surface-install.json"))
+}
+
 pub async fn ensure_dir(path: &PathBuf) -> Result<()> {
     tokio::fs::create_dir_all(path).await?;
     Ok(())

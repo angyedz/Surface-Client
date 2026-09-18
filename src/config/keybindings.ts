@@ -47,14 +47,6 @@ export const DEFAULT_KEYBINDINGS: KeybindingItem[] = [
     defaultKeys: ['Ctrl', 'I'],
   },
   {
-    id: 'open_solver',
-    name: 'Open Dependency Solver',
-    description: 'Inspect mod health, missing libraries, and auto-fix graph issues',
-    category: 'Navigation',
-    keys: ['Ctrl', 'D'],
-    defaultKeys: ['Ctrl', 'D'],
-  },
-  {
     id: 'open_skins',
     name: 'Open 3D Skin Studio',
     description: 'Open the 3D voxel skin studio and cape customizer',

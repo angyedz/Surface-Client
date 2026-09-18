@@ -51,6 +51,8 @@ export interface InstalledMod {
   title: string;
   summary: string;
   version: string;
+  /** Exact Modrinth version id used for dependency resolution. */
+  versionId?: string;
   versionNumber: string;
   fileName: string;
   fileUrl?: string;
@@ -152,10 +154,9 @@ export type NavigationTab =
   | 'play'
   | 'instances'
   | 'modrinth'
-  | 'servers'
+  | 'installed_mods'
   | 'skins'
   | 'news'
-  | 'dependency_solver'
   | 'settings'
   | 'console';
 
@@ -176,25 +177,6 @@ export interface QuickServer {
   iconBase64?: string;
   versionName?: string;
   lastChecked?: number;
-}
-
-export interface FriendItem {
-  id: string;
-  username: string;
-  avatarUrl: string;
-  status: 'online_launcher' | 'playing' | 'offline';
-  gameDetails?: string;
-  lastSeen?: string;
-  unreadCount?: number;
-  rank?: string;
-}
-
-export interface ChatMessage {
-  id: string;
-  sender: string;
-  text: string;
-  time: string;
-  isMe: boolean;
 }
 
 export interface NewsItem {
@@ -243,6 +225,7 @@ export interface DependencyIssue {
   severity: 'error' | 'warning';
   sourceMod: InstalledMod;
   targetProjectId?: string;
+  targetVersionId?: string;
   targetProjectTitle?: string;
   message: string;
   suggestedVersion?: string;
@@ -280,4 +263,3 @@ export interface WeeklyPlaytimeDay {
   minutes: number;
   sessions: number;
 }
-

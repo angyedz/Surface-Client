@@ -29,7 +29,6 @@ export const RunningGameOverlay: React.FC<RunningGameOverlayProps> = ({
   onStopGame,
   onCloseConsole,
 }) => {
-  const [activeTab, setActiveTab] = useState<'console' | 'screen'>('console');
   const [filterLevel, setFilterLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR'>('ALL');
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +50,14 @@ export const RunningGameOverlay: React.FC<RunningGameOverlayProps> = ({
     if (filterLevel === 'ALL') return true;
     return log.level === filterLevel;
   });
+
+  const canStop = launchState.status === 'running' && launchState.pid != null;
+  const statusLabel = launchState.status === 'running' ? 'Running' : launchState.stage || 'Not running';
+  const emptyLogLabel = launchState.status === 'running'
+    ? 'Waiting for Minecraft process output…'
+    : launchState.status === 'verifying_dependencies' || launchState.status === 'spawning_jvm'
+      ? 'Starting Minecraft…'
+      : 'Game is not launched';
 
   const formatUptime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -94,8 +101,14 @@ export const RunningGameOverlay: React.FC<RunningGameOverlayProps> = ({
 
             <button
               onClick={onStopGame}
-              className="px-3 py-1 rounded bg-red-950/80 hover:bg-red-900 border border-red-700 text-red-300 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-              title="Stop running instance" aria-label="Stop running instance"
+              disabled={!canStop}
+              className={`px-3 py-1 rounded border text-xs font-semibold flex items-center gap-1 transition-colors ${
+                canStop
+                  ? 'bg-red-950/80 hover:bg-red-900 border-red-700 text-red-300 cursor-pointer'
+                  : 'bg-neutral-900 border-neutral-800 text-neutral-600 cursor-not-allowed'
+              }`}
+              title={canStop ? 'Stop running instance' : statusLabel}
+              aria-label={canStop ? 'Stop running instance' : statusLabel}
             >
               <Square size={12} className="fill-current" />
               <span>Stop</span>
@@ -114,33 +127,12 @@ export const RunningGameOverlay: React.FC<RunningGameOverlayProps> = ({
         {/* Tab Subheader */}
         <div className="px-4 py-2 bg-neutral-950/80 border-b border-neutral-800/80 flex items-center justify-between text-xs">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setActiveTab('console')}
-              className={`px-3 py-1 rounded-lg font-mono font-medium flex items-center gap-1.5 transition-colors ${
-                activeTab === 'console'
-                  ? 'bg-neutral-800 text-primary-300'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
+            <div className="px-3 py-1 rounded-lg bg-neutral-800 text-primary-300 font-mono font-medium flex items-center gap-1.5">
               <Terminal size={14} />
               <span>Process Terminal Logs ({launchState.logs.length})</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('screen')}
-              className={`px-3 py-1 rounded-lg font-mono font-medium flex items-center gap-1.5 transition-colors ${
-                activeTab === 'screen'
-                  ? 'bg-neutral-800 text-primary-300'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Gamepad2 size={14} />
-              <span>Game Viewport Simulation</span>
-            </button>
           </div>
 
-          {activeTab === 'console' && (
-            <div className="flex items-center gap-1 bg-neutral-900 p-0.5 rounded-lg border border-neutral-800 font-mono text-[11px]">
+          <div className="flex items-center gap-1 bg-neutral-900 p-0.5 rounded-lg border border-neutral-800 font-mono text-[11px]">
               {(['ALL', 'INFO', 'WARN', 'ERROR'] as const).map((lvl) => (
                 <button
                   key={lvl}
@@ -154,14 +146,18 @@ export const RunningGameOverlay: React.FC<RunningGameOverlayProps> = ({
                   {lvl}
                 </button>
               ))}
-            </div>
-          )}
+          </div>
+        </div>
         </div>
 
         {/* Content View */}
         <div className="flex-1 overflow-hidden flex flex-col bg-neutral-950">
-          {activeTab === 'console' ? (
-            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 select-text">
+          <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 select-text">
+              {filteredLogs.length === 0 && (
+                <div className="h-full flex items-center justify-center text-neutral-500">
+                  {emptyLogLabel}
+                </div>
+              )}
               {filteredLogs.map((log: LogEntry) => {
                 let colorClass = 'text-neutral-300';
                 if (log.level === 'WARN') colorClass = 'text-amber-400';
@@ -190,64 +186,14 @@ export const RunningGameOverlay: React.FC<RunningGameOverlayProps> = ({
                 );
               })}
               <div ref={logsEndRef} />
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary-900/30 via-neutral-950 to-neutral-950 text-center space-y-4">
-              <div className="w-20 h-20 rounded-2xl bg-primary-500/10 border border-primary-500/30 flex items-center justify-center text-primary-400 shadow-xl shadow-primary-900/50">
-                <Gamepad2 size={40} className="animate-pulse" />
-              </div>
-
-              <div>
-                <h3 className="text-lg font-bold text-neutral-100 font-['Chakra_Petch']">
-                  MINECRAFT {instance?.mcVersion || ''} IS RUNNING
-                </h3>
-                <p className="text-xs text-neutral-400 font-mono mt-1">
-                  Active Surface Profile: {instance?.name || 'Minecraft'} ({instance?.installedMods?.length || 0} mods loaded)
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-neutral-900/80 border border-neutral-800 text-xs font-mono text-neutral-300 space-y-1.5 max-w-md w-full text-left">
-                <div className="flex justify-between">
-                  <span className="text-neutral-500">OpenGL Renderer:</span>
-                  <span className="text-primary-400">NVIDIA GeForce RTX (Vulkan/Sodium Engine)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-500">Display:</span>
-                  <span>{instance?.resolutionWidth || 1920}x{instance?.resolutionHeight || 1080} (60.0 FPS Sync)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-500">Allocated Memory:</span>
-                  <span>{instance?.memoryMaxMb || 4096} MB (-Xmx{instance?.memoryMaxMb || 4096}M)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-500">Game Directory:</span>
-                  <span className="truncate max-w-[200px]">{instance?.gameDir || './.minecraft'}</span>
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setActiveTab('console')}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-xs font-semibold text-neutral-200 transition-colors"
-                >
-                  View Console Logs
-                </button>
-                <button
-                  onClick={onStopGame}
-                  className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-neutral-100 text-xs font-bold transition-colors shadow-lg"
-                >
-                  Stop Minecraft
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
 
         {/* Footer */}
         <div className="p-3 bg-neutral-950 border-t border-neutral-800 flex items-center justify-between text-xs font-mono">
           <div className="text-neutral-500 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-primary-400" />
-            <span>Process ID: {launchState.pid}</span>
+            <span className={`w-2 h-2 rounded-full ${canStop ? 'bg-primary-400' : 'bg-neutral-600'}`} />
+            <span>{canStop ? `Process ID: ${launchState.pid}` : 'Game is not launched'}</span>
             <span>•</span>
             <span>Logs stream active</span>
           </div>

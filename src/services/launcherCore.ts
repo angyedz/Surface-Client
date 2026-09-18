@@ -54,7 +54,18 @@ export interface LauncherPaths {
 
 export const fetchSystemSpecs = () => invokeCore<SystemSpecs>('get_system_specs');
 export const listJavaInstallations = () => invokeCore<JavaInstallation[]>('list_java_installations');
+export const installJava = (major: number) => invokeCore<JavaInstallation>('install_java', { major });
 export const getLauncherPaths = () => invokeCore<LauncherPaths>('get_launcher_paths');
+export const configureNetworkProxy = (proxyUrl: string | null) =>
+  invokeCore<void>('configure_network_proxy', { proxyUrl });
+export const configureLogPaths = (launcherPath: string | null, modsPath: string | null) =>
+  invokeCore<void>('configure_log_paths', { launcherPath, modsPath });
+export const getDefaultLogPaths = () =>
+  invokeCore<{ launcher: string; mods: string }>('get_default_log_paths');
+export const discoverRunningInstances = (instanceIds: string[]) =>
+  invokeCore<string[]>('discover_running_instances', { instanceIds });
+export const listForgeVersions = (mcVersion?: string) =>
+  invokeCore<string[]>('list_forge_versions', { mcVersion });
 
 // --- server status ----------------------------------------------------------
 
@@ -114,6 +125,7 @@ export function toLaunchOptions(instance: InstanceProfile, account: PlayerAccoun
     memory_max_mb: instance.memoryMaxMb,
     jvm_args: instance.jvmArgs || '',
     java_path: instance.javaPath || 'auto',
+    java_version: instance.javaVersion || null,
     resolution_width: instance.resolutionWidth || null,
     resolution_height: instance.resolutionHeight || null,
     fullscreen: Boolean(instance.fullscreen),
@@ -137,6 +149,18 @@ export const stopInstance = (instanceId: string) =>
 
 export const isInstanceRunning = (instanceId: string) =>
   invokeCore<boolean>('is_instance_running', { instanceId });
+
+export interface MinecraftInstallStatus {
+  versionId: string;
+  jarPath: string;
+  exists: boolean;
+  size: number;
+}
+
+export const isMinecraftVersionInstalled = (versionId: string) =>
+  invokeCore<MinecraftInstallStatus>('is_minecraft_version_installed', { versionId });
+export const isInstanceReady = (instanceId: string) =>
+  invokeCore<boolean>('is_instance_ready', { instanceId });
 
 type Unlisten = () => void;
 
@@ -192,6 +216,8 @@ export interface CoreScreenshot {
 
 export const listInstanceScreenshots = (instanceId: string) =>
   invokeCore<CoreScreenshot[]>('list_instance_screenshots', { instanceId });
+export const listInstanceModFiles = (instanceId: string) =>
+  invokeCore<string[]>('list_instance_mod_files', { instanceId });
 
 /** Writes a file into the launcher's exports folder; returns the saved path. */
 export const saveExport = (fileName: string, data: Uint8Array) =>

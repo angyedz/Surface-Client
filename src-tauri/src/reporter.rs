@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+use crate::logging;
 
 pub const EVENT_PROGRESS: &str = "launch://progress";
 pub const EVENT_LOG: &str = "launch://log";
@@ -69,6 +70,8 @@ impl Reporter {
         thread: &str,
         message: impl Into<String>,
     ) {
+        let message = message.into();
+        logging::write(logger, level, &message);
         let _ = self.app.emit(
             EVENT_LOG,
             LaunchLogLine {
@@ -76,7 +79,7 @@ impl Reporter {
                 level: level.to_string(),
                 logger: logger.to_string(),
                 thread: thread.to_string(),
-                message: message.into(),
+                message,
             },
         );
     }

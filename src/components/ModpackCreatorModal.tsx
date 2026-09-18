@@ -33,6 +33,7 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [mcVersion, setMcVersion] = useState('');
+  const [versionFilter, setVersionFilter] = useState<'all' | 'release' | 'snapshot' | 'rc' | 'pre'>('release');
   const [loader, setLoader] = useState<ModLoader>('fabric');
   const [icon, setIcon] = useState('rocket');
   const [bannerUrl, setBannerUrl] = useState('');
@@ -41,6 +42,8 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
   const [allVersions, setAllVersions] = useState<MinecraftVersion[]>([]);
   const [currentLoaderVersions, setCurrentLoaderVersions] = useState<string[]>([]);
   const [selectedLoaderVersion, setSelectedLoaderVersion] = useState<string>('');
+  const [loaderVersionsLoading, setLoaderVersionsLoading] = useState(false);
+  const [loaderVersionsError, setLoaderVersionsError] = useState('');
 
   useEffect(() => {
     fetchOfficialMinecraftVersions().then((v) => {
@@ -48,24 +51,47 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
       setAllVersions(v);
       // Default to whatever Mojang currently calls the latest release rather
       // than to a version number written into the source.
-      setMcVersion((current) => current || v.find((entry) => entry.type === 'release')?.id || v[0].id);
+      setMcVersion((current) => current || v.find((entry) => entry.type === 'release')?.id || v[0]?.id || '');
     });
   }, []);
 
   useEffect(() => {
-    fetchDynamicLoaderVersions(loader).then((versions) => {
-      if (versions && versions.length > 0) {
+    // Loader builds are tied to a specific Minecraft version. Re-query after
+    // either selection changes so we never offer a build for another release.
+    setCurrentLoaderVersions([]);
+    setSelectedLoaderVersion('');
+    setLoaderVersionsError('');
+    if (!mcVersion || loader === 'vanilla') return;
+    setLoaderVersionsLoading(true);
+    fetchDynamicLoaderVersions(loader, mcVersion)
+      .then((versions) => {
         setCurrentLoaderVersions(versions);
-        setSelectedLoaderVersion(versions[0]);
-      }
-    });
-  }, [loader]);
+        setSelectedLoaderVersion(versions[0] || '');
+        if (versions.length === 0) setLoaderVersionsError(`No ${loader} build is available for Minecraft ${mcVersion}.`);
+      })
+      .catch((error) => {
+        setCurrentLoaderVersions([]);
+        setSelectedLoaderVersion('');
+        setLoaderVersionsError(error?.message || `Could not load ${loader} builds.`);
+      })
+      .finally(() => {
+        setLoaderVersionsLoading(false);
+      });
+  }, [loader, mcVersion]);
+
+  const filteredVersions = allVersions.filter((version) => {
+    if (versionFilter === 'all') return true;
+    if (versionFilter === 'release') return version.type === 'release';
+    if (versionFilter === 'snapshot') return version.type === 'snapshot';
+    if (versionFilter === 'rc') return /-rc-/.test(version.id);
+    return /-pre-/.test(version.id);
+  });
 
   // Import State
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
 
-  const loaderVersion = selectedLoaderVersion || currentLoaderVersions[0] || 'latest';
+  const loaderVersion = selectedLoaderVersion || currentLoaderVersions[0] || '';
 
   /**
    * Starter presets. A preset is a list of Modrinth slugs, resolved against the
@@ -134,7 +160,7 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
         memoryMaxMb: 4096,
         jvmArgs: '-XX:+UseG1GC',
         javaPath: 'auto',
-        javaVersion: selected?.defaultJava || 21,
+        javaVersion: selected?.defaultJava ?? 8,
         resolutionWidth: 1280,
         resolutionHeight: 720,
         fullscreen: false,
@@ -154,7 +180,16 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
     if (!name.trim()) return;
 
     const selectedVer = allVersions.find((v) => v.id === mcVersion);
-    const javaVer = selectedVer?.defaultJava || 21;
+    if (!selectedVer) {
+      setImportError('Выберите загруженную версию Minecraft.');
+      return;
+    }
+    const javaVer = selectedVer.defaultJava;
+
+    if (loader !== 'vanilla' && !loaderVersion) {
+      setImportError(loaderVersionsError || `No ${loader} version is available for Minecraft ${mcVersion}.`);
+      return;
+    }
 
     const newInstance: InstanceProfile = {
       id: `instance-${Date.now()}`,
@@ -202,7 +237,7 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
   return (
     <div
           className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4"
-          onClick={(event) => {
+          onMouseDown={(event) => {
             // Only a click on the backdrop itself closes the dialog.
             if (event.target === event.currentTarget) onClose();
           }}
@@ -284,23 +319,50 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Minecraft Version */}
                 <div>
                   <label className="block font-mono text-neutral-400 uppercase tracking-wider mb-1.5">
                     Minecraft Version
                   </label>
+                  <div className="flex gap-2">
+                  <select
+                    value={versionFilter}
+                    onChange={(e) => {
+                      const nextFilter = e.target.value as typeof versionFilter;
+                      setVersionFilter(nextFilter);
+                      const next = allVersions.filter((version) => {
+                        if (nextFilter === 'all') return true;
+                        if (nextFilter === 'release') return version.type === 'release';
+                        if (nextFilter === 'snapshot') return version.type === 'snapshot';
+                        if (nextFilter === 'rc') return /-rc-/.test(version.id);
+                        return /-pre-/.test(version.id);
+                      });
+                      if (!next.some((version) => version.id === mcVersion)) {
+                        setMcVersion(next[0]?.id || '');
+                      }
+                    }}
+                    aria-label="Version type filter"
+                    className="w-[42%] px-2 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-neutral-100 font-mono focus:outline-none focus:border-primary-500 cursor-pointer"
+                  >
+                    <option value="release">Releases</option>
+                    <option value="snapshot">Snapshots</option>
+                    <option value="rc">Release candidates</option>
+                    <option value="pre">Pre-releases</option>
+                    <option value="all">All types</option>
+                  </select>
                   <select
                     value={mcVersion}
                     onChange={(e) => setMcVersion(e.target.value)}
-                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-neutral-100 font-mono focus:outline-none focus:border-primary-500 cursor-pointer"
+                    className="min-w-0 flex-1 px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-neutral-100 font-mono focus:outline-none focus:border-primary-500 cursor-pointer"
                   >
-                    {allVersions.slice(0, 35).map((v) => (
+                    {filteredVersions.map((v) => (
                       <option key={v.id} value={v.id} className="bg-neutral-900">
                         {v.id} ({v.type})
                       </option>
                     ))}
                   </select>
+                  </div>
                 </div>
 
                 {/* Mod Loader */}
@@ -323,12 +385,14 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
               </div>
 
               {/* Specific Loader Version (Fabric, NeoForge, Quilt, Forge) */}
-              {loader !== 'vanilla' && currentLoaderVersions.length > 0 && (
+              {loader !== 'vanilla' && (
                 <div>
                   <label className="block font-mono text-neutral-400 uppercase tracking-wider mb-1.5">
                     {loader.toUpperCase()} Build / Version
                   </label>
-                  <select
+                  {loaderVersionsLoading ? (
+                    <div className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-neutral-500">Loading {loader} builds…</div>
+                  ) : currentLoaderVersions.length > 0 ? <select
                     value={selectedLoaderVersion || currentLoaderVersions[0]}
                     onChange={(e) => setSelectedLoaderVersion(e.target.value)}
                     className="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-neutral-100 font-mono text-xs focus:outline-none focus:border-primary-500 cursor-pointer"
@@ -338,7 +402,7 @@ export const ModpackCreatorModal: React.FC<ModpackCreatorModalProps> = ({
                         v{lv} {idx === 0 ? '• (Latest Stable)' : ''}
                       </option>
                     ))}
-                  </select>
+                  </select> : <div className="px-3 py-2 rounded-xl bg-red-950/30 border border-red-900/60 text-xs text-red-300">{loaderVersionsError || `No ${loader} build found for this Minecraft version.`}</div>}
                 </div>
               )}
 

@@ -3,11 +3,10 @@ import {
   Gamepad2,
   Package,
   Compass,
-  Globe,
   Sliders,
   Shirt,
   Newspaper,
-  GitFork,
+  ListChecks,
 } from 'lucide-react';
 import { InstanceProfile, NavigationTab } from '../types/launcher';
 
@@ -43,14 +42,9 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
       icon: <Compass size={18} />,
     },
     {
-      id: 'dependency_solver',
-      label: 'Solver',
-      icon: <GitFork size={18} />,
-    },
-    {
-      id: 'servers',
-      label: 'Servers',
-      icon: <Globe size={18} />,
+      id: 'installed_mods',
+      label: 'Installed Mods',
+      icon: <ListChecks size={18} />,
     },
     {
       id: 'skins',

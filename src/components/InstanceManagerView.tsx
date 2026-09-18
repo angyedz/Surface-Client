@@ -457,7 +457,7 @@ export const InstanceManagerView: React.FC<InstanceManagerViewProps> = ({
       {isEditingProfile && (
         <div
           className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4"
-          onClick={(event) => {
+          onMouseDown={(event) => {
             // Only a click on the backdrop itself closes the dialog.
             if (event.target === event.currentTarget) setIsEditingProfile(false);
           }}

@@ -37,15 +37,20 @@ export interface DependencyAnalysisResult {
  */
 export function isModPresent(
   installedMods: InstalledMod[],
-  projectIdOrSlug: string
+  projectIdOrSlug: string,
+  requiredVersionId?: string
 ): InstalledMod | undefined {
   const norm = projectIdOrSlug.toLowerCase();
-  return installedMods.find(
+  const found = installedMods.find(
     (m) =>
       m.modrinthId.toLowerCase() === norm ||
       m.slug.toLowerCase() === norm ||
       m.title.toLowerCase() === norm
   );
+  if (!found || !requiredVersionId) return found;
+  return found.versionId === requiredVersionId || found.id.endsWith(`-${requiredVersionId}`)
+    ? found
+    : undefined;
 }
 
 /**
@@ -100,7 +105,7 @@ export function analyzeInstanceDependencies(instance: InstanceProfile): Dependen
     for (const req of combinedRequired) {
       const targetId = req.projectSlug || req.projectId;
       const targetTitle = req.projectTitle || req.projectSlug || req.projectId;
-      const found = isModPresent(installedMods, targetId);
+      const found = isModPresent(installedMods, targetId, req.versionId);
 
       nodeDeps.push({
         projectId: req.projectId,
@@ -116,6 +121,7 @@ export function analyzeInstanceDependencies(instance: InstanceProfile): Dependen
           severity: 'error',
           sourceMod: mod,
           targetProjectId: req.projectId,
+          targetVersionId: req.versionId,
           targetProjectTitle: targetTitle,
           message: `"${mod.title}" requires "${targetTitle}" which is not installed.`,
           canAutoFix: true,
@@ -192,7 +198,8 @@ export function analyzeInstanceDependencies(instance: InstanceProfile): Dependen
 export async function resolveModDependency(
   projectIdOrSlug: string,
   mcVersion: string,
-  loader: ModLoader
+  loader: ModLoader,
+  requiredVersionId?: string
 ): Promise<InstalledMod | null> {
   const project = await getModrinthProject(projectIdOrSlug);
   if (!project) {
@@ -201,7 +208,13 @@ export async function resolveModDependency(
   }
 
   const versions = await getProjectVersions(project.project_id, [loader], [mcVersion]);
-  const best = versions[0];
+  const best = requiredVersionId
+    ? versions.find((version) => version.id === requiredVersionId)
+    : versions[0];
+  if (requiredVersionId && !best) {
+    console.warn(`${project.title} required version ${requiredVersionId}, but it is not compatible with ${mcVersion}/${loader}`);
+    return null;
+  }
   const file = best?.files.find((f) => f.primary) || best?.files[0];
 
   // Without a downloadable file there is nothing to install; say so rather than
@@ -240,6 +253,7 @@ export async function resolveModDependency(
     title,
     summary,
     version: versionName,
+    versionId: best.id,
     versionNumber,
     fileName,
     fileUrl,
@@ -271,8 +285,9 @@ export async function solveAllDependencies(
 }> {
   const resolvedMods: InstalledMod[] = [];
   let currentInstance = { ...instance, installedMods: [...instance.installedMods] };
+  const attempted = new Set<string>();
   let iterations = 0;
-  const maxIterations = 5; // prevent infinite loops
+  const maxIterations = 100; // safety guard for malformed/cyclic metadata
 
   while (iterations < maxIterations) {
     iterations++;
@@ -283,14 +298,38 @@ export async function solveAllDependencies(
       break;
     }
 
-    const uniqueMissingIds = Array.from(
-      new Set(missing.map((m) => m.targetProjectId || m.targetProjectTitle!))
-    );
+    const uniqueMissing = Array.from(new Map(
+      missing.map((item) => {
+        const id = item.targetProjectId || item.targetProjectTitle!;
+        return [`${id}:${item.targetVersionId || ''}`, item];
+      })
+    ).values()).filter((item) => {
+      const id = item.targetProjectId || item.targetProjectTitle!;
+      return !attempted.has(`${id}:${item.targetVersionId || ''}`.toLowerCase());
+    });
 
-    for (const depId of uniqueMissingIds) {
+    if (uniqueMissing.length === 0) break;
+
+    for (const missingDependency of uniqueMissing) {
+      const depId = missingDependency.targetProjectId || missingDependency.targetProjectTitle!;
+      const attemptKey = `${depId}:${missingDependency.targetVersionId || ''}`.toLowerCase();
+      attempted.add(attemptKey);
       onProgress?.(`Solving dependency: ${depId}...`);
-      const mod = await resolveModDependency(depId, currentInstance.mcVersion, currentInstance.loader);
+      const mod = await resolveModDependency(
+        depId,
+        currentInstance.mcVersion,
+        currentInstance.loader,
+        missingDependency.targetVersionId
+      );
       if (mod) {
+        // A project may already be installed at the wrong version. Replace it
+        // when metadata explicitly requires another Modrinth version id.
+        const existing = currentInstance.installedMods.findIndex(
+          (installed) => installed.modrinthId.toLowerCase() === mod.modrinthId.toLowerCase()
+        );
+        if (existing >= 0) {
+          currentInstance.installedMods.splice(existing, 1);
+        }
         resolvedMods.push(mod);
         currentInstance.installedMods.push(mod);
       }

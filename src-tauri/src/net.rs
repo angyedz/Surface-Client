@@ -3,26 +3,103 @@ use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use sha1::{Digest, Sha1};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
-static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static PROXY_URL: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 
-pub fn client() -> &'static reqwest::Client {
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
+fn configured_proxy() -> Option<String> {
+    PROXY_URL
+        .get_or_init(|| RwLock::new(None))
+        .read()
+        .ok()
+        .and_then(|value| value.clone())
+}
+
+/// JVM system properties for third-party installers spawned by the launcher.
+/// Reqwest's proxy configuration does not automatically reach a child JVM.
+pub fn java_proxy_args() -> Vec<String> {
+    let Some(value) = configured_proxy() else { return Vec::new() };
+    let Ok(url) = url::Url::parse(&value) else { return Vec::new() };
+    let host = url.host_str().unwrap_or_default();
+    let Some(port) = url.port_or_known_default() else { return Vec::new() };
+    let scheme = url.scheme().to_ascii_lowercase();
+    let mut args = Vec::new();
+    if matches!(scheme.as_str(), "socks5" | "socks5h" | "socks4" | "socks4a") {
+        args.push(format!("-DsocksProxyHost={host}"));
+        args.push(format!("-DsocksProxyPort={port}"));
+    } else if matches!(scheme.as_str(), "http" | "https") {
+        args.push(format!("-Dhttps.proxyHost={host}"));
+        args.push(format!("-Dhttps.proxyPort={port}"));
+        args.push(format!("-Dhttp.proxyHost={host}"));
+        args.push(format!("-Dhttp.proxyPort={port}"));
+    } else {
+        return Vec::new();
+    }
+    let username = url.username();
+    if !username.is_empty() {
+        args.push(format!("-Dhttps.proxyUser={username}"));
+        args.push(format!("-Dhttp.proxyUser={username}"));
+        args.push(format!("-Djava.net.socks.username={username}"));
+    }
+    if let Some(password) = url.password() {
+        args.push(format!("-Dhttps.proxyPassword={password}"));
+        args.push(format!("-Dhttp.proxyPassword={password}"));
+        args.push(format!("-Djava.net.socks.password={password}"));
+    }
+    args
+}
+
+pub fn set_proxy(proxy_url: Option<String>) -> Result<()> {
+    let normalized = proxy_url.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    if let Some(value) = &normalized {
+        reqwest::Proxy::all(value)
+            .map_err(|error| LauncherError::msg(format!("invalid proxy URL: {error}")))?;
+    }
+    *PROXY_URL
+        .get_or_init(|| RwLock::new(None))
+        .write()
+        .map_err(|_| LauncherError::msg("proxy configuration lock failed"))? = normalized;
+    Ok(())
+}
+
+pub fn client() -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+    if let Some(proxy_url) = configured_proxy() {
+        builder = builder.proxy(reqwest::Proxy::all(proxy_url).expect("validated proxy URL"));
+    }
+
+    builder
             .user_agent(concat!("SurfaceClient/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(45))
             .pool_max_idle_per_host(16)
             .build()
             .expect("failed to build the shared HTTP client")
-    })
 }
 
 pub async fn get_json<T: DeserializeOwned>(url: &str) -> Result<T> {
-    let response = client().get(url).send().await?.error_for_status()?;
-    let bytes = response.bytes().await?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let fallback_url = url
+        .replace("https://piston-meta.mojang.com/", "https://launchermeta.mojang.com/");
+    let urls = if fallback_url != url { vec![url, fallback_url.as_str()] } else { vec![url] };
+    let mut last_error = None;
+    for candidate in urls {
+        for attempt in 0..3 {
+            match client().get(candidate).send().await.and_then(|response| response.error_for_status()) {
+                Ok(response) => {
+                    let bytes = response.bytes().await?;
+                    return Ok(serde_json::from_slice(&bytes)?);
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt < 2 {
+                        tokio::time::sleep(Duration::from_millis(400 * (attempt + 1))).await;
+                    }
+                }
+            }
+        }
+    }
+    Err(last_error.expect("request loop always records an error").into())
 }
 
 fn sha1_of(bytes: &[u8]) -> String {
@@ -60,7 +137,35 @@ pub async fn download_file(url: &str, path: &Path, expected_sha1: Option<&str>) 
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    let response = client().get(url).send().await?.error_for_status()?;
+    let fallback_url = url
+        .replace("https://piston-meta.mojang.com/", "https://launchermeta.mojang.com/");
+    let urls = if fallback_url != url {
+        vec![url, fallback_url.as_str()]
+    } else {
+        vec![url]
+    };
+    let mut last_error = None;
+    let mut response = None;
+    for candidate in urls {
+        for attempt in 0..2 {
+            match client().get(candidate).send().await.and_then(|res| res.error_for_status()) {
+                Ok(value) => {
+                    response = Some(value);
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt == 0 {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        }
+        if response.is_some() { break; }
+    }
+    let response = response.ok_or_else(|| {
+        LauncherError::msg(format!("could not download {url}: {}", last_error.map(|e| e.to_string()).unwrap_or_else(|| "request failed".into())))
+    })?;
     let mut stream = response.bytes_stream();
     let mut buffer: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {

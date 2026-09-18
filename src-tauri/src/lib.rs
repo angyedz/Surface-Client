@@ -4,6 +4,7 @@ mod files;
 mod install;
 mod java;
 mod launch;
+mod logging;
 mod meta;
 mod net;
 mod paths;
@@ -15,6 +16,7 @@ use reporter::Reporter;
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 use tauri::AppHandle;
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SystemSpecs {
@@ -56,6 +58,11 @@ fn list_java_installations() -> Vec<java::JavaInstallation> {
 }
 
 #[tauri::command]
+async fn install_java(major: u32) -> Result<java::JavaInstallation> {
+    java::install(major).await
+}
+
+#[tauri::command]
 fn get_launcher_paths() -> Result<serde_json::Value> {
     Ok(serde_json::json!({
         "root": paths::root_dir()?.to_string_lossy(),
@@ -68,6 +75,42 @@ fn get_launcher_paths() -> Result<serde_json::Value> {
 #[tauri::command]
 async fn list_minecraft_versions() -> Result<meta::VersionManifest> {
     net::get_json(meta::VERSION_MANIFEST_URL).await
+}
+
+#[tauri::command]
+async fn list_forge_versions(mc_version: Option<String>) -> Result<Vec<String>> {
+    let data: serde_json::Value = net::get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json").await?;
+    let Some(promos) = data.get("promos").and_then(|value| value.as_object()) else {
+        return Err(error::LauncherError::msg("Forge metadata has no promotions"));
+    };
+    let mut versions: Vec<String> = promos.iter()
+        .filter(|(key, _)| mc_version.as_ref().map(|version| key.starts_with(&format!("{version}-"))).unwrap_or(true))
+        .filter_map(|(_, value)| value.as_str().map(str::to_string))
+        .collect();
+    versions.sort();
+    versions.dedup();
+    versions.reverse();
+    Ok(versions)
+}
+
+#[tauri::command]
+fn discover_running_instances(instance_ids: Vec<String>) -> Vec<String> {
+    launch::discover_running_instances(&instance_ids)
+}
+
+#[tauri::command]
+fn configure_log_paths(launcher_path: Option<String>, mods_path: Option<String>) -> Result<()> {
+    logging::configure(launcher_path, mods_path)
+}
+
+#[tauri::command]
+fn get_default_log_paths() -> Result<serde_json::Value> {
+    logging::defaults()
+}
+
+#[tauri::command]
+fn configure_network_proxy(proxy_url: Option<String>) -> Result<()> {
+    net::set_proxy(proxy_url)
 }
 
 /// Installs everything the instance needs and starts the game.
@@ -83,9 +126,24 @@ async fn launch_instance(
 
     let result = async {
         reporter.progress("verifying_dependencies", "Checking version metadata", 2.0);
-        let resolved =
-            meta::resolve(&options.mc_version, &options.loader, &options.loader_version).await?;
+        let resolved = tokio::time::timeout(
+            Duration::from_secs(360),
+            meta::resolve(&options.mc_version, &options.loader, &options.loader_version),
+        )
+        .await
+        .map_err(|_| error::LauncherError::msg(
+            "version metadata resolution timed out after 6 minutes; check the configured network or proxy",
+        ))??;
         let installed = install::install(&resolved, &reporter).await?;
+        let marker = paths::instance_install_marker(&options.instance_id)?;
+        if let Some(parent) = marker.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&marker, serde_json::to_vec(&serde_json::json!({
+            "minecraft": options.mc_version,
+            "loader": options.loader,
+            "loaderVersion": options.loader_version,
+        }))?).await?;
         reporter.progress("building_classpath", "Building the runtime classpath", 92.0);
         launch::launch(options, &resolved.json, &installed, reporter.clone()).await
     }
@@ -97,6 +155,11 @@ async fn launch_instance(
     }
 
     result
+}
+
+#[tauri::command]
+async fn is_instance_ready(instance_id: String) -> Result<bool> {
+    Ok(tokio::fs::metadata(paths::instance_install_marker(&instance_id)?).await.is_ok())
 }
 
 /// The exact command line `launch_instance` would run, for display and export.
@@ -133,6 +196,29 @@ fn is_instance_running(instance_id: String) -> bool {
 }
 
 #[tauri::command]
+async fn is_minecraft_version_installed(version_id: String) -> Result<serde_json::Value> {
+    let version_dir = paths::version_dir(&version_id)?;
+    let jar = version_dir.join(format!("{version_id}.jar"));
+    // The client jar is the authoritative install marker. Metadata can be
+    // regenerated from Mojang and should not make an already downloaded game
+    // look uninstalled after a restart.
+    let metadata = tokio::fs::metadata(&jar).await.ok();
+    eprintln!(
+        "[Surface] install-check version={} jar={} exists={} size={}",
+        version_id,
+        jar.display(),
+        metadata.is_some(),
+        metadata.as_ref().map(|value| value.len()).unwrap_or(0)
+    );
+    Ok(serde_json::json!({
+        "versionId": version_id,
+        "jarPath": jar.to_string_lossy(),
+        "exists": metadata.is_some(),
+        "size": metadata.map(|value| value.len()).unwrap_or(0),
+    }))
+}
+
+#[tauri::command]
 async fn sync_instance_mods(
     instance_id: String,
     mods: Vec<files::ModFile>,
@@ -143,6 +229,11 @@ async fn sync_instance_mods(
 #[tauri::command]
 async fn list_instance_screenshots(instance_id: String) -> Result<Vec<files::Screenshot>> {
     files::list_screenshots(&instance_id).await
+}
+
+#[tauri::command]
+async fn list_instance_mod_files(instance_id: String) -> Result<Vec<String>> {
+    files::list_mod_files(&instance_id).await
 }
 
 #[tauri::command]
@@ -217,14 +308,23 @@ pub fn run() {
             get_system_specs,
             ping_minecraft_server,
             list_java_installations,
+            install_java,
             get_launcher_paths,
             list_minecraft_versions,
+            list_forge_versions,
+            discover_running_instances,
+            configure_network_proxy,
+            configure_log_paths,
+            get_default_log_paths,
             launch_instance,
             preview_launch_command,
             stop_instance,
             is_instance_running,
+            is_minecraft_version_installed,
+            is_instance_ready,
             sync_instance_mods,
             list_instance_screenshots,
+            list_instance_mod_files,
             delete_screenshot,
             save_export,
             open_instance_folder,

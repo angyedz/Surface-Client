@@ -16,9 +16,18 @@ import {
   Keyboard,
 } from 'lucide-react';
 import { InstanceProfile, KeybindingItem, SystemSpecs, PlayerAccount } from '../types/launcher';
-import { previewLaunchCommand, toLaunchOptions } from '../services/launcherCore';
+import { configureLogPaths, configureNetworkProxy, getDefaultLogPaths, listJavaInstallations, installJava, JavaInstallation, previewLaunchCommand, toLaunchOptions } from '../services/launcherCore';
+import { loadString, saveString } from '../services/storage';
 import { saveGeneratedFile } from '../services/modpackService';
 import { KeybindingsManager } from './KeybindingsManager';
+
+function buildProxyUrl(url: string, username: string, password: string): string {
+  if (!url || (!username && !password)) return url;
+  const parsed = new URL(url);
+  parsed.username = username;
+  parsed.password = password;
+  return parsed.toString();
+}
 
 interface LaunchSettingsViewProps {
   instance?: InstanceProfile | null;
@@ -49,14 +58,83 @@ export const LaunchSettingsView: React.FC<LaunchSettingsViewProps> = ({
   const [jvmArgs, setJvmArgs] = useState(instance?.jvmArgs || '-XX:+UseG1GC');
   const [javaVersion, setJavaVersion] = useState(instance?.javaVersion || 21);
   const [javaPath, setJavaPath] = useState(instance?.javaPath || 'auto');
+  const [javaInstallations, setJavaInstallations] = useState<JavaInstallation[]>([]);
+  const [installingJava, setInstallingJava] = useState<number | null>(null);
   const [width, setWidth] = useState(instance?.resolutionWidth || 1920);
   const [height, setHeight] = useState(instance?.resolutionHeight || 1080);
   const [fullscreen, setFullscreen] = useState(instance?.fullscreen || false);
   const [autoConnect, setAutoConnect] = useState(instance?.serverAutoConnect || '');
   const [gameDir, setGameDir] = useState(instance?.gameDir || './.minecraft');
+  const [proxyUrl, setProxyUrl] = useState(() => loadString('surface_network_proxy'));
+  const [proxyUsername, setProxyUsername] = useState(() => loadString('surface_network_proxy_username'));
+  const [proxyPassword, setProxyPassword] = useState(() => loadString('surface_network_proxy_password'));
+  const [proxyStatus, setProxyStatus] = useState('');
+  const [launcherLogPath, setLauncherLogPath] = useState(() => loadString('surface_launcher_log_path'));
+  const [modsLogPath, setModsLogPath] = useState(() => loadString('surface_mods_log_path'));
+  const [defaultLogPaths, setDefaultLogPaths] = useState<{ launcher: string; mods: string } | null>(null);
+  const [logStatus, setLogStatus] = useState('');
 
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [savedFeedback, setSavedFeedback] = useState(false);
+
+  useEffect(() => {
+    listJavaInstallations().then(setJavaInstallations).catch(() => setJavaInstallations([]));
+    getDefaultLogPaths().then(setDefaultLogPaths).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    configureLogPaths(launcherLogPath.trim() || null, modsLogPath.trim() || null).catch(() => undefined);
+  }, []);
+
+  const handleLogSave = async () => {
+    try {
+      await configureLogPaths(launcherLogPath.trim() || null, modsLogPath.trim() || null);
+      saveString('surface_launcher_log_path', launcherLogPath.trim());
+      saveString('surface_mods_log_path', modsLogPath.trim());
+      setLogStatus('Log paths applied');
+    } catch (error) {
+      setLogStatus(String(error));
+    }
+    window.setTimeout(() => setLogStatus(''), 2500);
+  };
+
+  const handleInstallJava = async (major: number) => {
+    setInstallingJava(major);
+    try {
+      const installed = await installJava(major);
+      setJavaInstallations((current) => [installed, ...current.filter((item) => item.major !== major)]);
+      setJavaVersion(major);
+      setJavaPath(installed.path);
+    } catch (error) {
+      setLogStatus(String(error));
+    } finally {
+      setInstallingJava(null);
+    }
+  };
+
+  useEffect(() => {
+    try {
+      configureNetworkProxy(buildProxyUrl(proxyUrl.trim(), proxyUsername, proxyPassword) || null).catch(() => undefined);
+    } catch {
+      // Invalid values are reported when the user presses Apply.
+    }
+  }, []);
+
+  const handleProxySave = async () => {
+    const value = proxyUrl.trim();
+    let configuredValue = value;
+    try {
+      configuredValue = buildProxyUrl(value, proxyUsername, proxyPassword);
+      await configureNetworkProxy(configuredValue || null);
+      saveString('surface_network_proxy', value);
+      saveString('surface_network_proxy_username', proxyUsername);
+      saveString('surface_network_proxy_password', proxyPassword);
+      setProxyStatus(value ? 'Proxy enabled' : 'Direct connection enabled');
+    } catch (error) {
+      setProxyStatus(String(error));
+    }
+    window.setTimeout(() => setProxyStatus(''), 2500);
+  };
 
   // Hardware specs calculation
   const totalHardwareRamMb = systemSpecs?.total_memory_mb || 16384;
@@ -439,11 +517,11 @@ export const LaunchSettingsView: React.FC<LaunchSettingsViewProps> = ({
             </div>
 
             <div className="grid grid-cols-3 gap-2">
-              {[21, 17, 8].map((v) => (
+              {[25, 21, 17, 8].map((v) => (
                 <button
                   key={v}
                   type="button"
-                  onClick={() => setJavaVersion(v)}
+                  onClick={() => { setJavaVersion(v); setJavaPath('auto'); }}
                   className={`p-3 rounded-xl border text-xs font-semibold flex flex-col items-center gap-0.5 transition-all ${
                     javaVersion === v
                       ? 'bg-primary-500/20 border-primary-500 text-primary-300'
@@ -452,10 +530,43 @@ export const LaunchSettingsView: React.FC<LaunchSettingsViewProps> = ({
                 >
                   <span className="font-bold text-sm">Java {v}</span>
                   <span className="text-[10px] font-mono text-neutral-500">
-                    {v === 21 ? 'MC 1.20.5+' : v === 17 ? 'MC 1.18 - 1.20.4' : 'MC 1.8 - 1.16'}
+                    {v === 25 ? 'Latest JVM' : v === 21 ? 'MC 1.20.5+' : v === 17 ? 'MC 1.18 - 1.20.4' : 'MC 1.8 - 1.16'}
                   </span>
                 </button>
               ))}
+            </div>
+
+            <div className="rounded-xl border border-neutral-800 bg-neutral-950/70 p-3 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-neutral-300 font-semibold">Detected runtimes</span>
+                <span className="text-neutral-500 font-mono">{javaInstallations.length}</span>
+              </div>
+              {javaInstallations.length === 0 ? (
+                <p className="text-[11px] text-amber-300">No Java runtime detected. Install Java for this Minecraft version.</p>
+              ) : (
+                <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                  {javaInstallations.map((java) => (
+                    <button
+                      key={java.path}
+                      type="button"
+                      onClick={() => { setJavaPath(java.path); setJavaVersion(java.major); }}
+                      className={`w-full text-left rounded-lg border px-2.5 py-2 text-[11px] transition-colors ${
+                        javaPath === java.path ? 'border-primary-500/60 bg-primary-500/10 text-primary-200' : 'border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-neutral-200'
+                      }`}
+                    >
+                      <div className="flex justify-between gap-2"><span>Java {java.major}</span><span>{java.vendor}</span></div>
+                      <div className="truncate font-mono text-neutral-500">{java.path}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="grid grid-cols-4 gap-1.5 pt-1">
+                {[8, 17, 21, 25].map((major) => (
+                  <button key={major} type="button" onClick={() => handleInstallJava(major)} disabled={installingJava !== null} className="rounded-lg border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-[10px] text-neutral-300 hover:border-primary-500/60 disabled:opacity-50">
+                    {installingJava === major ? 'Downloading…' : `Install ${major}`}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div>
@@ -597,6 +708,80 @@ export const LaunchSettingsView: React.FC<LaunchSettingsViewProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Logs */}
+      <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
+        <div>
+          <h3 className="text-sm font-bold text-neutral-200">Log files</h3>
+          <p className="text-xs text-neutral-500">Leave a field empty to use the default path.</p>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <label className="space-y-1">
+            <span className="text-[11px] text-neutral-400">Launcher log</span>
+            <input value={launcherLogPath} onChange={(event) => setLauncherLogPath(event.target.value)} placeholder={defaultLogPaths?.launcher || 'Default launcher.log path'} className="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-xs text-neutral-100 font-mono focus:outline-none focus:border-primary-500" />
+          </label>
+          <label className="space-y-1">
+            <span className="text-[11px] text-neutral-400">Mods and dependencies log</span>
+            <input value={modsLogPath} onChange={(event) => setModsLogPath(event.target.value)} placeholder={defaultLogPaths?.mods || 'Default mods.log path'} className="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-xs text-neutral-100 font-mono focus:outline-none focus:border-primary-500" />
+          </label>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[11px] text-neutral-500">Logs are written by the native launcher.</span>
+          <div className="flex items-center gap-3">
+            {logStatus && <span className="text-[11px] text-primary-300">{logStatus}</span>}
+            <button type="button" onClick={handleLogSave} className="px-4 py-2 rounded-xl bg-primary-500/15 border border-primary-500/40 text-primary-200 text-xs font-semibold hover:bg-primary-500/25 transition-colors">Apply log paths</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Network */}
+      <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
+        <div>
+          <h3 className="text-sm font-bold text-neutral-200">Download proxy</h3>
+          <p className="text-xs text-neutral-500">Optional. Used for Mojang metadata and game files.</p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="text"
+            value={proxyUrl}
+            onChange={(event) => setProxyUrl(event.target.value)}
+            placeholder="socks5h://host:port or http://host:port"
+            className="flex-1 px-3.5 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-xs text-neutral-100 font-mono focus:outline-none focus:border-primary-500"
+            spellCheck={false}
+          />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={proxyUsername}
+            onChange={(event) => setProxyUsername(event.target.value)}
+            placeholder="Username (optional)"
+            autoComplete="username"
+            className="px-3.5 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-xs text-neutral-100 font-mono focus:outline-none focus:border-primary-500"
+          />
+          <input
+            type="password"
+            value={proxyPassword}
+            onChange={(event) => setProxyPassword(event.target.value)}
+            placeholder="Password (optional)"
+            autoComplete="current-password"
+            className="px-3.5 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-xs text-neutral-100 font-mono focus:outline-none focus:border-primary-500"
+          />
+        </div>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleProxySave}
+            className="px-4 py-2 rounded-xl bg-primary-500/15 border border-primary-500/40 text-primary-200 text-xs font-semibold hover:bg-primary-500/25 transition-colors"
+          >
+            Apply proxy
+          </button>
+        </div>
+        <div className="flex items-center justify-between gap-3 text-[11px] text-neutral-500">
+          <span>Leave empty for a direct connection.</span>
+          {proxyStatus && <span className="text-primary-300">{proxyStatus}</span>}
         </div>
       </div>
 

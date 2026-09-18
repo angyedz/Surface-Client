@@ -10,17 +10,27 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { Clock, TrendingUp, Calendar, Zap } from 'lucide-react';
-import { WeeklyPlaytimeDay } from '../types/launcher';
+import { LaunchStatus, WeeklyPlaytimeDay } from '../types/launcher';
 
 interface PlaytimeChartProps {
   data: WeeklyPlaytimeDay[];
+  launchStatus: LaunchStatus;
 }
 
-export const PlaytimeChart: React.FC<PlaytimeChartProps> = ({ data }) => {
+export const PlaytimeChart: React.FC<PlaytimeChartProps> = ({ data, launchStatus }) => {
   const totalMinutes = data.reduce((acc, curr) => acc + curr.minutes, 0);
   const totalHours = (totalMinutes / 60).toFixed(1);
   const avgMinutes = Math.round(totalMinutes / (data.length || 1));
   const peakDay = [...data].sort((a, b) => b.minutes - a.minutes)[0];
+  const clientStatus = launchStatus === 'running'
+    ? 'Running'
+    : launchStatus === 'idle'
+      ? 'Ready'
+      : launchStatus === 'crashed'
+        ? 'Error'
+        : launchStatus === 'finished'
+          ? 'Finished'
+          : 'Busy';
 
   const formatHoursMinutes = (mins: number) => {
     const h = Math.floor(mins / 60);
@@ -132,8 +142,8 @@ export const PlaytimeChart: React.FC<PlaytimeChartProps> = ({ data }) => {
         <div className="p-2 rounded-xl bg-neutral-950/60 border border-neutral-800/60">
           <div className="text-[10px] text-neutral-500 uppercase">Client Status</div>
           <div className="text-xs font-bold text-primary-400 mt-0.5 flex items-center justify-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse" />
-            Synchronized
+            <span className={`w-1.5 h-1.5 rounded-full ${launchStatus === 'crashed' ? 'bg-red-400' : launchStatus === 'running' ? 'bg-primary-400 animate-pulse' : 'bg-neutral-500'}`} />
+            {clientStatus}
           </div>
         </div>
       </div>

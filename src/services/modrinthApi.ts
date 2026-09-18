@@ -143,7 +143,17 @@ export async function getProjectVersions(
     queryParams.toString() ? '?' + queryParams.toString() : ''
   }`;
 
-  const response = await fetch(url, { headers: { 'User-Agent': MODRINTH_USER_AGENT } });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { 'User-Agent': MODRINTH_USER_AGENT },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new Error(`Modrinth returned ${response.status} for ${idOrSlug}`);
   }

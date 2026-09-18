@@ -62,6 +62,12 @@ fn library_job(library: &Library, classifier: Option<&str>) -> Result<Option<Dow
         if classifier.is_some() {
             return Ok(None);
         }
+
+        // Mojang uses this shape for libraries that only ship native
+        // classifiers (for example jinput-platform). There is no ordinary
+        // artifact to download; constructing one from the Maven coordinate
+        // produces a guaranteed 404.
+        return Ok(None);
     }
 
     if classifier.is_some() {
@@ -82,13 +88,13 @@ async fn run_jobs(jobs: Vec<DownloadJob>, reporter: &Reporter, status: &str, lab
     let total = jobs.len().max(1) as f32;
     let done = Arc::new(AtomicU64::new(0));
 
-    let results: Vec<Result<()>> = stream::iter(jobs.into_iter().map(|job| {
+    let results: Vec<Result<u64>> = stream::iter(jobs.into_iter().map(|job| {
         let done = Arc::clone(&done);
         let reporter = reporter.clone();
         let label = label.to_string();
         let status = status.to_string();
         async move {
-            net::download_file(&job.url, &job.path, job.sha1.as_deref()).await?;
+            let transferred = net::download_file(&job.url, &job.path, job.sha1.as_deref()).await?;
             let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
             // Reporting every single file would flood the UI event loop.
             if finished % 12 == 0 {
@@ -99,18 +105,34 @@ async fn run_jobs(jobs: Vec<DownloadJob>, reporter: &Reporter, status: &str, lab
                     from + (to - from) * fraction,
                 );
             }
-            Ok(())
+            Ok(transferred)
         }
     }))
     .buffer_unordered(PARALLEL_DOWNLOADS)
     .collect()
     .await;
 
+    let mut downloaded_bytes = 0u64;
     for result in results {
-        result?;
+        downloaded_bytes += result?;
     }
-    reporter.progress(status, format!("{label} complete"), to);
+    let summary = if downloaded_bytes == 0 {
+        format!("{label} ready from cache")
+    } else {
+        format!("{label} ready ({} downloaded)", format_bytes(downloaded_bytes))
+    };
+    reporter.progress(status, summary, to);
     Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    }
 }
 
 /// Unpacks a natives jar, skipping metadata and any explicitly excluded paths.
@@ -242,7 +264,7 @@ pub async fn install(resolved: &ResolvedVersion, reporter: &Reporter) -> Result<
         "SurfaceLauncher",
         format!("Resolved {} libraries for {}", library_jobs.len(), version.id),
     );
-    run_jobs(library_jobs, reporter, "downloading_assets", "Downloading libraries", 10.0, 40.0).await?;
+    run_jobs(library_jobs, reporter, "downloading_assets", "Checking libraries", 10.0, 40.0).await?;
 
     let natives_dir = paths::natives_dir(&version.id)?;
     if !native_jobs.is_empty() {
@@ -286,7 +308,7 @@ pub async fn install(resolved: &ResolvedVersion, reporter: &Reporter) -> Result<
         })
         .collect();
 
-    run_jobs(asset_jobs, reporter, "downloading_assets", "Downloading assets", 48.0, 88.0).await?;
+    run_jobs(asset_jobs, reporter, "downloading_assets", "Checking assets", 48.0, 88.0).await?;
 
     let main_class = version
         .main_class
