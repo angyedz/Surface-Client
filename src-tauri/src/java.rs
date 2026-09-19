@@ -77,6 +77,58 @@ pub fn probe(path: &Path) -> Result<JavaInstallation> {
     })
 }
 
+/// Directories that commonly hold a JDK on this platform.
+///
+/// Windows paths come from the environment rather than a literal `C:\`, since a
+/// machine that installs to another drive still reports it through
+/// `%ProgramFiles%`. macOS and Linux both have a system-wide location and a
+/// per-user one, and package managers add their own.
+fn search_dirs() -> Vec<PathBuf> {
+    let home = dirs::home_dir();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    // Runtimes the launcher downloaded itself must be found again after a
+    // restart, otherwise installing Java appears to do nothing the next time.
+    if let Ok(root) = crate::paths::root_dir() {
+        dirs.push(root.join("jvm"));
+    }
+
+    if cfg!(target_os = "windows") {
+        for variable in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            let Some(base) = std::env::var_os(variable).map(PathBuf::from) else {
+                continue;
+            };
+            dirs.push(base.join("Java"));
+            dirs.push(base.join("Eclipse Adoptium"));
+            dirs.push(base.join("Microsoft").join("jdk"));
+            dirs.push(base.join("Zulu"));
+            dirs.push(base.join("Amazon Corretto"));
+            dirs.push(base.join("BellSoft"));
+        }
+        // The official Minecraft launcher keeps its own runtimes here.
+        if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            dirs.push(appdata.join(".minecraft").join("runtime"));
+        }
+    } else if cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/Library/Java/JavaVirtualMachines"));
+        dirs.push(PathBuf::from("/opt/homebrew/opt"));
+        dirs.push(PathBuf::from("/usr/local/opt"));
+        if let Some(home) = &home {
+            dirs.push(home.join("Library/Java/JavaVirtualMachines"));
+        }
+    } else {
+        dirs.push(PathBuf::from("/usr/lib/jvm"));
+        dirs.push(PathBuf::from("/usr/lib64/jvm"));
+        dirs.push(PathBuf::from("/usr/java"));
+        dirs.push(PathBuf::from("/opt/java"));
+        if let Some(home) = &home {
+            dirs.push(home.join(".sdkman/candidates/java"));
+        }
+    }
+
+    dirs
+}
+
 fn candidate_roots() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
 
@@ -84,29 +136,19 @@ fn candidate_roots() -> Vec<PathBuf> {
         roots.push(PathBuf::from(java_home));
     }
 
-    let search_dirs: &[&str] = if cfg!(target_os = "windows") {
-        &[
-            "C:\\Program Files\\Java",
-            "C:\\Program Files\\Eclipse Adoptium",
-            "C:\\Program Files\\Microsoft\\jdk",
-            "C:\\Program Files\\Zulu",
-        ]
-    } else if cfg!(target_os = "macos") {
-        &["/Library/Java/JavaVirtualMachines"]
-    } else {
-        &["/usr/lib/jvm", "/usr/lib64/jvm", "/opt/java"]
-    };
-
-    for dir in search_dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+    for dir in search_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 roots.push(path.clone());
-                // macOS bundles nest the runtime inside the .jdk package.
+                // macOS bundles nest the runtime inside the .jdk package, and
+                // the official launcher's runtimes add one directory of their
+                // own before it.
                 roots.push(path.join("Contents").join("Home"));
+                roots.push(path.join("jre.bundle").join("Contents").join("Home"));
             }
         }
     }
@@ -154,6 +196,27 @@ pub fn discover() -> Vec<JavaInstallation> {
 pub fn select_for(required_major: u32) -> Option<JavaInstallation> {
     let installations = discover();
     installations.iter().find(|j| j.major == required_major).cloned()
+}
+
+/// A runtime to run launcher-side tooling with, such as the Forge installer.
+///
+/// `java` is not reliably on PATH — Windows installers do not add it and the
+/// runtimes this launcher downloads never are — so a discovered installation is
+/// used when there is one, newest first.
+pub fn tooling_binary() -> std::ffi::OsString {
+    discover()
+        .first()
+        .map(|installation| {
+            // Tooling output has to be readable, so use the console binary
+            // rather than the windowless one discovery reports.
+            let path = Path::new(&installation.path);
+            if path.file_name().and_then(|n| n.to_str()) == Some("javaw.exe") {
+                path.with_file_name("java.exe").into_os_string()
+            } else {
+                std::ffi::OsString::from(&installation.path)
+            }
+        })
+        .unwrap_or_else(|| std::ffi::OsString::from("java"))
 }
 
 #[derive(serde::Deserialize)]
@@ -271,11 +334,15 @@ async fn extract_jdk(archive: &Path, target: &Path, is_zip: bool) -> Result<()> 
 /// macOS builds nest the runtime under `Contents/Home`, everything else puts
 /// `bin` at the top level.
 fn java_binary_in(root: &Path) -> Result<PathBuf> {
-    let name = if cfg!(target_os = "windows") { "java.exe" } else { "java" };
     for prefix in ["bin", "Contents/Home/bin"] {
-        let candidate = root.join(prefix).join(name);
-        if candidate.exists() {
-            return Ok(candidate);
+        let dir = root.join(prefix);
+        // Prefer the windowless launcher where there is one, so starting the
+        // game does not also open a console window.
+        for name in [executable_name(), "java.exe", "java"] {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
         }
     }
     Err(LauncherError::msg(format!(

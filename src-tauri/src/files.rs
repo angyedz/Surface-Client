@@ -166,9 +166,12 @@ pub async fn delete_screenshot(path: String) -> Result<()> {
 
 /// Strips any directory part from a user-supplied file name.
 fn safe_file_name(name: &str) -> String {
+    // The set Windows rejects is the widest, so applying it everywhere keeps an
+    // export written on one platform readable on the others.
     let cleaned: String = name
         .chars()
-        .filter(|c| !matches!(c, '/' | '\\' | ':' | '\0'))
+        .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'))
+        .filter(|c| !c.is_control())
         .collect();
     let trimmed = cleaned.trim().trim_start_matches('.');
     if trimmed.is_empty() {

@@ -181,7 +181,13 @@ pub fn build_command(
             command.extend(collect_arguments(&arguments.jvm, &values, &features));
         }
         None => {
-            // Pre-1.13 metadata has no JVM argument list at all.
+            // Pre-1.13 metadata has no JVM argument list at all, so the
+            // platform-specific flags modern versions declare have to be added
+            // here. On macOS the windowing library must own the first thread or
+            // the game exits as soon as it opens a window.
+            if cfg!(target_os = "macos") {
+                command.push("-XstartOnFirstThread".to_string());
+            }
             command.push(format!(
                 "-Djava.library.path={}",
                 installed.natives_dir.to_string_lossy()
@@ -441,7 +447,10 @@ pub fn discover_running_instances(instance_ids: &[String]) -> Vec<String> {
             let Ok(game_dir) = crate::paths::instance_game_dir(instance_id) else { return false; };
             let needle = game_dir.to_string_lossy();
             system.processes().values().any(|process| {
+                // Windows reports `java.exe`/`javaw.exe`, every other platform
+                // the bare name.
                 let name = process.name().to_string_lossy().to_lowercase();
+                let name = name.strip_suffix(".exe").unwrap_or(&name);
                 let command = process.cmd().iter().map(|part| part.to_string_lossy()).collect::<Vec<_>>().join(" ");
                 (name == "java" || name == "javaw" || command.contains("net.minecraft"))
                     && command.contains("--gameDir")

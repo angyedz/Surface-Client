@@ -378,7 +378,15 @@ async fn fetch_forge_profile(
         net::download_file(&installer_url, &installer, None).await?;
 
         eprintln!("[Surface] Forge: running installer");
-        let mut installer_process = tokio::process::Command::new("java");
+        let mut installer_process =
+            tokio::process::Command::new(crate::java::tooling_binary());
+        // The installer is headless; on Windows it would otherwise flash a
+        // console window in the user's face.
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            installer_process.creation_flags(0x0800_0000);
+        }
         installer_process.args(net::java_proxy_args());
         installer_process
             .arg("-jar")

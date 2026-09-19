@@ -183,6 +183,7 @@ export const LaunchSettingsView: React.FC<LaunchSettingsViewProps> = ({
 
   // The preview is whatever the native core would actually run.
   const [currentCmd, setCurrentCmd] = useState('Select an instance to see its launch command.');
+  const [cmdParts, setCmdParts] = useState<string[]>([]);
 
   useEffect(() => {
     if (!instance) return;
@@ -207,7 +208,9 @@ export const LaunchSettingsView: React.FC<LaunchSettingsViewProps> = ({
       )
     )
       .then((parts) => {
-        if (!cancelled) setCurrentCmd(parts.join(' '));
+        if (cancelled) return;
+        setCmdParts(parts);
+        setCurrentCmd(parts.join(' '));
       })
       .catch((error) => {
         if (!cancelled) setCurrentCmd(String(error));
@@ -238,13 +241,20 @@ export const LaunchSettingsView: React.FC<LaunchSettingsViewProps> = ({
     setTimeout(() => setCopiedCmd(false), 2000);
   };
 
+  // Every argument is quoted on export: the java binary and the game directory
+  // both sit under paths that routinely contain spaces, and an unquoted script
+  // silently splits them into separate arguments.
+  const quoteForShell = (part: string) => `'${part.replace(/'/g, `'\\''`)}'`;
+  const quoteForBatch = (part: string) => `"${part.replace(/"/g, '""')}"`;
+
   const handleDownloadScript = async (os: 'windows' | 'linux') => {
-    if (!instance || currentCmd.startsWith('Select an instance')) return;
-    const header =
+    if (!instance || cmdParts.length === 0) return;
+    const quote = os === 'windows' ? quoteForBatch : quoteForShell;
+    const command = cmdParts.map(quote).join(' ');
+    const content =
       os === 'windows'
-        ? `@echo off\r\nREM Surface Client launch script for ${instance.name}\r\n`
-        : `#!/usr/bin/env bash\n# Surface Client launch script for ${instance.name}\n`;
-    const content = os === 'windows' ? `${header}${currentCmd}\r\npause\r\n` : `${header}${currentCmd}\n`;
+        ? `@echo off\r\nREM Surface Client launch script for ${instance.name}\r\n${command}\r\npause\r\n`
+        : `#!/usr/bin/env bash\nset -e\n# Surface Client launch script for ${instance.name}\n${command}\n`;
     const blob = new Blob([content], { type: 'text/plain' });
     const path = await saveGeneratedFile(
       blob,
