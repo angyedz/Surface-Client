@@ -13,7 +13,7 @@ as a real child process whose output is piped into the console view.
   assets, each checked against its SHA-1 before use.
 - Builds Fabric and Quilt instances by merging the loader profile with the vanilla version,
   and Forge instances by running its official installer in an isolated workspace, so your
-  own `.minecraft` is never touched.
+  own `.minecraft` is never touched. Forge is unstable; see below.
 - Starts the game as a real child process and streams its log output into the console view.
 - Signs in to Microsoft accounts with the OAuth device code flow, or creates offline accounts
   with the same UUID scheme vanilla servers use.
@@ -22,6 +22,11 @@ as a real child process whose output is piped into the console view.
   deleting it, so toggling one never costs a download.
 - Downloads a matching Eclipse Temurin JDK when the version an instance needs is missing,
   on Windows, macOS and Linux, x64 and ARM alike.
+
+Forge support is still unstable. The launcher drives Forge's official installer, which is
+slow, needs a working Java runtime of its own and fails on some version combinations; when
+it does, the error it printed is reported as-is. Treat a Forge instance as something to
+verify rather than something that will just work.
 
 NeoForge instances still need their official installer run by hand; point the instance at the
 version it produces.
