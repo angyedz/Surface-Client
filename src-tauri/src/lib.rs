@@ -8,7 +8,6 @@ mod logging;
 mod meta;
 mod net;
 mod paths;
-mod ping;
 mod reporter;
 
 use error::Result;
@@ -45,11 +44,6 @@ fn get_system_specs() -> SystemSpecs {
         os_name: System::name().unwrap_or_else(|| std::env::consts::OS.to_string()),
         os_version: System::os_version().unwrap_or_else(|| "unknown".to_string()),
     }
-}
-
-#[tauri::command]
-async fn ping_minecraft_server(address: String, port: Option<u16>) -> ping::ServerStatus {
-    ping::status(&address, port).await
 }
 
 #[tauri::command]
@@ -306,7 +300,6 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             get_system_specs,
-            ping_minecraft_server,
             list_java_installations,
             install_java,
             get_launcher_paths,

@@ -467,23 +467,6 @@ export default function App() {
     return () => { cancelled = true; };
   }, [runningInTauri, activeInstance?.mcVersion, launchState.status]);
 
-  const handleQuickConnectServer = (ip: string) => {
-    if (!activeInstance) {
-      showToast('Please create a profile before connecting to servers!', 'info');
-      setIsCreatingModpack(true);
-      return;
-    }
-    const updated = {
-      ...activeInstance,
-      serverAutoConnect: ip,
-    };
-    handleUpdateInstance(updated);
-    showToast(`Connecting to ${ip}...`, 'info');
-    if (launchState.status !== 'running') {
-      handleLaunchGame();
-    }
-  };
-
   const refreshScreenshots = () => {
     if (!runningInTauri || !activeInstanceId) return;
     listInstanceScreenshots(activeInstanceId)
@@ -903,7 +886,6 @@ export default function App() {
           onOpenConsole={() => {
             if (launchState.status === 'running') setIsGameConsoleOpen(true);
           }}
-          onQuickConnectServer={handleQuickConnectServer}
           username={username}
           avatarUrl={activeAccount?.avatarUrl || activeSkin?.skinUrl}
           accounts={accounts}

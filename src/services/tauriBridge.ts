@@ -20,12 +20,6 @@ export interface SystemSpecs {
   os_version: string;
 }
 
-export interface NativePingResult {
-  success: boolean;
-  latency_ms?: number;
-  error?: string;
-}
-
 /**
  * Minimize the native application window
  */
@@ -74,26 +68,6 @@ export async function fetchSystemSpecs(): Promise<SystemSpecs | null> {
       return await invoke<SystemSpecs>('get_system_specs');
     } catch (err) {
       console.warn('Failed to invoke get_system_specs:', err);
-    }
-  }
-  return null;
-}
-
-/**
- * Perform a native TCP socket ping to a Minecraft server from Rust
- */
-export async function pingServerNative(
-  address: string,
-  port?: number
-): Promise<NativePingResult | null> {
-  if (isTauri()) {
-    try {
-      return await invoke<NativePingResult>('ping_minecraft_server', {
-        address,
-        port,
-      });
-    } catch (err) {
-      console.warn('Failed to invoke ping_minecraft_server:', err);
     }
   }
   return null;

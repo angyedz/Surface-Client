@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost https://api.modrinth.com https://launchermeta.mojang.com https://launchercontent.mojang.com https://api.mojang.com https://sessionserver.mojang.com https://meta.fabricmc.net https://meta.quiltmc.org https://maven.neoforged.net https://files.minecraftforge.net https://api.mcstatus.io https://mc-heads.net https://minotar.net https://crafatar.com",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost https://api.modrinth.com https://launchermeta.mojang.com https://launchercontent.mojang.com https://api.mojang.com https://sessionserver.mojang.com https://meta.fabricmc.net https://meta.quiltmc.org https://maven.neoforged.net https://files.minecraftforge.net https://mc-heads.net https://minotar.net https://crafatar.com",
       "assetProtocol": {
         "enable": true,
         "scope": [

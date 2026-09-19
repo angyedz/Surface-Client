@@ -67,22 +67,6 @@ export const discoverRunningInstances = (instanceIds: string[]) =>
 export const listForgeVersions = (mcVersion?: string) =>
   invokeCore<string[]>('list_forge_versions', { mcVersion });
 
-// --- server status ----------------------------------------------------------
-
-export interface ServerStatus {
-  online: boolean;
-  latency_ms?: number;
-  players_online?: number;
-  players_max?: number;
-  motd?: string;
-  version_name?: string;
-  favicon?: string;
-  error?: string;
-}
-
-export const pingServer = (address: string, port?: number) =>
-  invokeCore<ServerStatus>('ping_minecraft_server', { address, port });
-
 // --- launching --------------------------------------------------------------
 
 export interface LaunchProgressEvent {

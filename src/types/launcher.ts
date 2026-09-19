@@ -160,25 +160,6 @@ export type NavigationTab =
   | 'settings'
   | 'console';
 
-export interface QuickServer {
-  id: string;
-  name: string;
-  ip: string;
-  shortLabel: string;
-  badgeColor: string;
-  playersOnline: number;
-  maxPlayers: number;
-  pingMs: number;
-  description: string;
-  iconType: 'hypixel' | 'minemen' | 'gomme' | 'cubecraft' | 'anarchy' | 'custom' | string;
-  category?: 'all' | 'minigames' | 'pvp' | 'survival' | 'mmorpg' | 'skyblock' | 'anarchy';
-  isOnline?: boolean;
-  motdClean?: string;
-  iconBase64?: string;
-  versionName?: string;
-  lastChecked?: number;
-}
-
 export interface NewsItem {
   id: string;
   title: string;

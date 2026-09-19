@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Terminal,
   ChevronDown,
@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import { InstanceProfile, LaunchStatus, PlayerAccount } from '../types/launcher';
 import { InstanceIcon } from './InstanceIcon';
-import { loadServers } from '../services/serverList';
 import { useDismissable } from '../hooks/useDismissable';
 import {
   minimizeWindow,
@@ -26,7 +25,6 @@ interface TopTitleBarProps {
   onSelectInstance: (instance: InstanceProfile) => void;
   launchStatus: LaunchStatus;
   onOpenConsole: () => void;
-  onQuickConnectServer: (ip: string) => void;
   username?: string;
   avatarUrl?: string;
   onChangeUsername?: (name: string) => void;
@@ -43,7 +41,6 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
   onSelectInstance,
   launchStatus,
   onOpenConsole,
-  onQuickConnectServer,
   username = 'Player',
   avatarUrl,
   onChangeUsername,
@@ -53,13 +50,6 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
   onSelectAccount,
   onOpenAccountManager,
 }) => {
-  // Only the first few saved servers fit in the title bar. Read once rather
-  // than parsing local storage on every render.
-  const [quickServers, setQuickServers] = useState(() => loadServers().slice(0, 4));
-  useEffect(() => {
-    setQuickServers(loadServers().slice(0, 4));
-  }, [instances]);
-
   // One menu at a time: opening either closes the other.
   const [openMenu, setOpenMenu] = useState<'instance' | 'account' | null>(null);
   const instanceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -165,25 +155,6 @@ export const TopTitleBar: React.FC<TopTitleBarProps> = ({
             </div>
           )}
         </div>
-      </div>
-
-      {/* Middle: quick connect chips for the servers the user saved */}
-      <div className="relative z-10 hidden md:flex items-center gap-1.5">
-        {quickServers.length > 0 && (
-          <span className="text-[10px] text-neutral-500 font-mono uppercase mr-1">
-            Quick Play:
-          </span>
-        )}
-        {quickServers.map((srv) => (
-          <button
-            key={srv.id}
-            onClick={() => onQuickConnectServer(srv.ip)}
-            className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-[11px] font-medium text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
-            title={`Launch ${srv.name} (${srv.ip})`}
-          >
-            {srv.name}
-          </button>
-        ))}
       </div>
 
       {/* Right Controls: Account, Console & Window Controls */}

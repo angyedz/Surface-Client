@@ -3,10 +3,9 @@
 A Minecraft launcher for the desktop, built on Tauri 2 and React over a native Rust core.
 
 Nothing in the interface is invented. The version list comes from Mojang, mods and their
-dependencies from Modrinth, server status from the server itself over the game's own
-protocol. Downloads are checked against their published SHA-1, the classpath and the
-argument list are assembled from the version metadata, and the game runs as a real child
-process whose output is piped into the console view.
+dependencies from Modrinth. Downloads are checked against their published SHA-1, the
+classpath and the argument list are assembled from the version metadata, and the game runs
+as a real child process whose output is piped into the console view.
 
 ## What it does
 
@@ -21,7 +20,6 @@ process whose output is piped into the console view.
 - Browses Modrinth, downloads mod jars into the instance folder and resolves their required
   dependencies from Modrinth's own metadata. Disabling a mod renames its jar rather than
   deleting it, so toggling one never costs a download.
-- Pings servers with the Minecraft Server List Ping protocol for MOTD, player counts and latency.
 - Downloads a matching Eclipse Temurin JDK when the version an instance needs is missing,
   on Windows, macOS and Linux, x64 and ARM alike.
 
@@ -87,5 +85,5 @@ logs/         launcher and mod logs
 ```
 src/            React UI
 src/services/   API clients and the bridge to the native core
-src-tauri/src/  the launcher core: meta, install, launch, auth, ping, java
+src-tauri/src/  the launcher core: meta, install, launch, auth, java
 ```
