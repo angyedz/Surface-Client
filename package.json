@@ -2,7 +2,7 @@
   "name": "surface-client",
   "private": true,
   "version": "1.0.0",
-  "description": "Minecraft launcher: instance management, Modrinth mods and a native launch core",
+  "description": "Desktop Minecraft launcher with a native Rust core: Mojang versions, Fabric/Quilt/Forge instances, Modrinth mods and Microsoft sign-in",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000",

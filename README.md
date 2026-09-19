@@ -1,21 +1,32 @@
 # Surface Client
 
-A Minecraft launcher for the desktop, built with Tauri 2, React and a native Rust core.
+A Minecraft launcher for the desktop, built on Tauri 2 and React over a native Rust core.
+
+Nothing in the interface is invented. The version list comes from Mojang, mods and their
+dependencies from Modrinth, server status from the server itself over the game's own
+protocol. Downloads are checked against their published SHA-1, the classpath and the
+argument list are assembled from the version metadata, and the game runs as a real child
+process whose output is piped into the console view.
 
 ## What it does
 
 - Installs any Minecraft version from Mojang's manifest: client jar, libraries, natives and
   assets, each checked against its SHA-1 before use.
-- Runs Fabric and Quilt instances by merging the loader profile with the vanilla version.
+- Builds Fabric and Quilt instances by merging the loader profile with the vanilla version,
+  and Forge instances by running its official installer in an isolated workspace, so your
+  own `.minecraft` is never touched.
 - Starts the game as a real child process and streams its log output into the console view.
 - Signs in to Microsoft accounts with the OAuth device code flow, or creates offline accounts
   with the same UUID scheme vanilla servers use.
 - Browses Modrinth, downloads mod jars into the instance folder and resolves their required
-  dependencies from Modrinth's own metadata.
+  dependencies from Modrinth's own metadata. Disabling a mod renames its jar rather than
+  deleting it, so toggling one never costs a download.
 - Pings servers with the Minecraft Server List Ping protocol for MOTD, player counts and latency.
+- Downloads a matching Eclipse Temurin JDK when the version an instance needs is missing,
+  on Windows, macOS and Linux, x64 and ARM alike.
 
-Forge and NeoForge instances are not installed automatically yet. Run their official installer
-and point the instance at the version it produces.
+NeoForge instances still need their official installer run by hand; point the instance at the
+version it produces.
 
 ## Requirements
 
@@ -23,8 +34,9 @@ and point the instance at the version it produces.
   On Fedora: `sudo dnf install webkit2gtk4.1-devel libsoup3-devel openssl-devel gtk3-devel
   librsvg2-devel patchelf`.
 - Node.js 20+.
-- A Java runtime for the versions you want to play. The launcher finds installed runtimes and
-  picks the one each version requires.
+- A Java runtime for the versions you want to play. The launcher searches the usual locations
+  for each platform and picks the one a version requires; if it is missing, it can download
+  one from Adoptium instead.
 
 ## Running it
 
@@ -64,6 +76,10 @@ libraries/    shared maven library cache
 assets/       shared asset objects and indexes
 natives/      unpacked native binaries, per version
 instances/    one .minecraft game directory per instance
+jvm/          Java runtimes the launcher downloaded itself
+forge/        isolated workspaces for the Forge installer
+exports/      modpacks and launch scripts written out of the app
+logs/         launcher and mod logs
 ```
 
 ## Layout
@@ -71,5 +87,5 @@ instances/    one .minecraft game directory per instance
 ```
 src/            React UI
 src/services/   API clients and the bridge to the native core
-src-tauri/src/  the launcher core: meta, install, launch, auth, ping
+src-tauri/src/  the launcher core: meta, install, launch, auth, ping, java
 ```
