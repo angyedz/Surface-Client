@@ -132,6 +132,8 @@ export const InstanceManagerView: React.FC<InstanceManagerViewProps> = ({
       setTimeout(() => setExportFeedback(null), 3000);
     } catch (e) {
       console.error(e);
+      setExportFeedback(e instanceof Error ? e.message : 'Failed to export .mrpack');
+      setTimeout(() => setExportFeedback(null), 5000);
     } finally {
       setIsExporting(false);
     }

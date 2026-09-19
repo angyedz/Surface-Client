@@ -34,22 +34,33 @@ export async function exportToMrpack(instance: InstanceProfile): Promise<Blob> {
     dependencies[loaderKey] = instance.loaderVersion || 'latest';
   }
 
-  const mrpackFiles = instance.installedMods
-    .filter((m) => m.enabled)
-    .map((mod) => ({
-      path: `mods/${mod.fileName || `${mod.slug}.jar`}`,
-      hashes: {
-        sha1: 'e4d8f1e569c73b06e6bf471ad00493864d4d12c1',
-      },
-      env: {
-        client: 'required',
-        server: 'optional',
-      },
-      downloads: [
-        mod.fileUrl || `https://cdn.modrinth.com/data/${mod.modrinthId}/versions/${mod.versionNumber}/${mod.fileName || `${mod.slug}.jar`}`,
-      ],
-      fileSize: mod.fileSize || 1024000,
-    }));
+  const enabledMods = instance.installedMods.filter((mod) => mod.enabled);
+  const incompleteMods = enabledMods.filter(
+    (mod) => !mod.fileUrl || !mod.sha1 || !Number.isFinite(mod.fileSize) || mod.fileSize <= 0
+  );
+
+  // A .mrpack is a manifest, not a copy of the local jars. Its downloader
+  // verifies each declared hash, so invented URLs, hashes, or sizes make a
+  // package that looks valid but cannot be installed reliably.
+  if (incompleteMods.length > 0) {
+    throw new Error(
+      `Cannot export a verified .mrpack: ${incompleteMods
+        .map((mod) => mod.title || mod.fileName)
+        .join(', ')} ${incompleteMods.length === 1 ? 'is' : 'are'} missing published download metadata. ` +
+        'Reinstall the listed mod from Modrinth, or export the profile JSON instead.'
+    );
+  }
+
+  const mrpackFiles = enabledMods.map((mod) => ({
+    path: `mods/${mod.fileName}`,
+    hashes: { sha1: mod.sha1 as string },
+    env: {
+      client: 'required',
+      server: 'optional',
+    },
+    downloads: [mod.fileUrl as string],
+    fileSize: mod.fileSize as number,
+  }));
 
   const indexData: ModrinthIndexJson = {
     formatVersion: 1,
@@ -61,14 +72,8 @@ export async function exportToMrpack(instance: InstanceProfile): Promise<Blob> {
     dependencies,
   };
 
-  // Add modrinth.index.json
   zip.file('modrinth.index.json', JSON.stringify(indexData, null, 2));
 
-  // Add sample overrides
-  zip.folder('overrides');
-  zip.file('overrides/README.txt', `Created with Surface Client - Minecraft Launcher\nInstance: ${instance.name}\nVersion: ${instance.mcVersion} (${instance.loader})`);
-
-  // Generate blob
   return await zip.generateAsync({ type: 'blob', mimeType: 'application/x-modrinth-modpack+zip' });
 }
 
