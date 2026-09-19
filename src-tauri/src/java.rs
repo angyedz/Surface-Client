@@ -171,33 +171,174 @@ struct AdoptiumPackage {
     link: String,
 }
 
+/// The operating system name Adoptium uses in its asset queries.
+fn adoptium_os() -> Result<&'static str> {
+    Ok(if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "mac"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        return Err(LauncherError::msg(
+            "Adoptium does not publish builds for this operating system; install Java manually",
+        ));
+    })
+}
+
+/// The architecture name Adoptium uses, including the ARM builds.
+///
+/// Apple Silicon and the 64-bit ARM boards both report `aarch64`; 32-bit ARM,
+/// which still turns up on single-board machines, is published as `arm`.
+fn adoptium_arch() -> Result<&'static str> {
+    Ok(if cfg!(target_arch = "x86_64") {
+        "x64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "arm") {
+        "arm"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
+    } else if cfg!(target_arch = "riscv64") {
+        "riscv64"
+    } else if cfg!(target_arch = "powerpc64") {
+        "ppc64le"
+    } else {
+        return Err(LauncherError::msg(
+            "Adoptium does not publish builds for this CPU architecture; install Java manually",
+        ));
+    })
+}
+
+/// Unpacks a downloaded JDK, dropping the single top-level directory the
+/// archive wraps everything in.
+///
+/// Windows gets a zip, every other platform a gzipped tar. The zip goes through
+/// the crate the launcher already uses for natives; the tar goes through the
+/// system `tar`, which ships with both macOS and every Linux distribution.
+async fn extract_jdk(archive: &Path, target: &Path, is_zip: bool) -> Result<()> {
+    if !is_zip {
+        let status = tokio::process::Command::new("tar")
+            .arg("-xzf")
+            .arg(archive)
+            .arg("--strip-components=1")
+            .arg("-C")
+            .arg(target)
+            .status()
+            .await?;
+        if !status.success() {
+            return Err(LauncherError::msg("could not unpack the downloaded JDK archive"));
+        }
+        return Ok(());
+    }
+
+    let archive = archive.to_path_buf();
+    let target = target.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&archive)?)?;
+        for index in 0..zip.len() {
+            let mut entry = zip.by_index(index)?;
+            let Some(path) = entry.enclosed_name().map(|p| p.to_path_buf()) else {
+                continue;
+            };
+            // Strip the wrapper directory, so the layout matches the tar path.
+            let mut components = path.components();
+            components.next();
+            let relative = components.as_path();
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+
+            let out = target.join(relative);
+            if entry.is_dir() {
+                std::fs::create_dir_all(&out)?;
+                continue;
+            }
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut file = std::fs::File::create(&out)?;
+            std::io::copy(&mut entry, &mut file)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| LauncherError::msg(format!("unpacking the JDK failed: {e}")))?
+}
+
+/// Finds the java binary inside an unpacked JDK.
+///
+/// macOS builds nest the runtime under `Contents/Home`, everything else puts
+/// `bin` at the top level.
+fn java_binary_in(root: &Path) -> Result<PathBuf> {
+    let name = if cfg!(target_os = "windows") { "java.exe" } else { "java" };
+    for prefix in ["bin", "Contents/Home/bin"] {
+        let candidate = root.join(prefix).join(name);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(LauncherError::msg(format!(
+        "the unpacked JDK at {} contains no java binary",
+        root.display()
+    )))
+}
+
+/// Downloads an Eclipse Temurin JDK for this machine and reports it like any
+/// other discovered installation.
 pub async fn install(major: u32) -> Result<JavaInstallation> {
-    if !matches!(major, 8 | 17 | 21 | 25) {
+    // Minecraft and its loaders only ever ask for these, and Adoptium keeps
+    // builds of all of them across every platform the launcher runs on.
+    if !matches!(major, 8 | 11 | 16 | 17 | 21 | 25) {
         return Err(LauncherError::msg(format!("unsupported Java version: {major}")));
     }
-    let api = format!(
-        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture=x64&os=linux&image_type=jdk&vendor=eclipse"
-    );
-    let assets: Vec<AdoptiumAsset> = net::get_json(&api).await?;
-    let link = assets.first().ok_or_else(|| LauncherError::msg(format!("Java {major} is not available for this system")))?.binary.package.link.clone();
-    let root = paths::root_dir()?.join("jvm");
-    let archive = root.join(format!("java-{major}.tar.gz"));
-    let target = root.join(format!("java-{major}"));
-    tokio::fs::create_dir_all(&root).await?;
-    tokio::fs::create_dir_all(&target).await?;
-    net::download_file(&link, &archive, None).await?;
 
-    let status = tokio::process::Command::new("tar")
-        .args(["-xzf"])
-        .arg(&archive)
-        .arg("--strip-components=1")
-        .arg("-C")
-        .arg(&target)
-        .status()
-        .await?;
-    if !status.success() {
-        return Err(LauncherError::msg(format!("could not extract Java {major}")));
+    let os = adoptium_os()?;
+    let arch = adoptium_arch()?;
+    let api = format!(
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot\
+         ?architecture={arch}&os={os}&image_type=jdk&vendor=eclipse"
+    );
+
+    let assets: Vec<AdoptiumAsset> = net::get_json(&api).await?;
+    let link = assets
+        .first()
+        .ok_or_else(|| {
+            LauncherError::msg(format!(
+                "Eclipse Temurin has no Java {major} build for {os}/{arch}"
+            ))
+        })?
+        .binary
+        .package
+        .link
+        .clone();
+
+    let is_zip = link.ends_with(".zip");
+    let root = paths::root_dir()?.join("jvm");
+    let archive = root.join(format!("java-{major}{}", if is_zip { ".zip" } else { ".tar.gz" }));
+    let target = root.join(format!("java-{major}"));
+
+    // A half-unpacked directory from an interrupted run would shadow the real
+    // binary, so the target always starts empty.
+    if target.exists() {
+        tokio::fs::remove_dir_all(&target).await?;
     }
-    let binary = target.join("bin/java");
+    tokio::fs::create_dir_all(&target).await?;
+
+    net::download_file(&link, &archive, None).await?;
+    extract_jdk(&archive, &target, is_zip).await?;
+    let _ = tokio::fs::remove_file(&archive).await;
+
+    let binary = java_binary_in(&target)?;
+
+    // The tar and zip readers both drop the executable bit.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = tokio::fs::metadata(&binary).await?.permissions();
+        permissions.set_mode(permissions.mode() | 0o755);
+        tokio::fs::set_permissions(&binary, permissions).await?;
+    }
+
     probe(&binary)
 }
